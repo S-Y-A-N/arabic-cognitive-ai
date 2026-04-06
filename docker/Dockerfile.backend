@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+# System dependencies (includes Java for Farasa)
+RUN apt-get update && apt-get install -y \
+    curl wget git build-essential \
+    default-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps first (layer cache)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Download CAMeL Tools data models
+RUN python -c "
+try:
+    from camel_tools.data import DataCatalogue
+    DataCatalogue.download_package('msf-r13n')
+    print('CAMeL Tools data ready')
+except Exception as e:
+    print(f'CAMeL Tools data skip: {e}')
+" || true
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

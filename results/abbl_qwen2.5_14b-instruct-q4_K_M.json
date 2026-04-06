@@ -1,0 +1,85 @@
+{
+  "benchmark": "abbl",
+  "model": "qwen2.5:14b-instruct-q4_K_M",
+  "accuracy": 0.875,
+  "f1": 0.4643,
+  "avg_latency_ms": 32716.4,
+  "dialect_accuracy": 0.0,
+  "msa_leak_rate": 0.0,
+  "total_samples": 8,
+  "category_breakdown": {
+    "knowledge": {
+      "accuracy": 1.0,
+      "correct": 3,
+      "total": 3
+    },
+    "reasoning": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "total": 2
+    },
+    "gcc_policy": {
+      "accuracy": 0.6666666666666666,
+      "correct": 2,
+      "total": 3
+    }
+  },
+  "per_sample_results": [
+    {
+      "id": "abbl_001",
+      "correct": true,
+      "model_answer": "B",
+      "gold_answer": "B",
+      "latency_ms": 83577.95858383179
+    },
+    {
+      "id": "abbl_002",
+      "correct": true,
+      "model_answer": "C",
+      "gold_answer": "C",
+      "latency_ms": 21095.48282623291
+    },
+    {
+      "id": "abbl_003",
+      "correct": true,
+      "model_answer": "B",
+      "gold_answer": "B",
+      "latency_ms": 42682.464361190796
+    },
+    {
+      "id": "abbl_004",
+      "correct": true,
+      "model_answer": "C",
+      "gold_answer": "C",
+      "latency_ms": 26188.16590309143
+    },
+    {
+      "id": "abbl_005",
+      "correct": true,
+      "model_answer": "C",
+      "gold_answer": "C",
+      "latency_ms": 18798.624753952026
+    },
+    {
+      "id": "abbl_006",
+      "correct": true,
+      "model_answer": "B",
+      "gold_answer": "B",
+      "latency_ms": 27339.674949645996
+    },
+    {
+      "id": "abbl_007",
+      "correct": true,
+      "model_answer": "B",
+      "gold_answer": "B",
+      "latency_ms": 23213.14764022827
+    },
+    {
+      "id": "abbl_008",
+      "correct": false,
+      "model_answer": "D",
+      "gold_answer": "C",
+      "latency_ms": 18835.32428741455
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+# ═══════════════════════════════════════════════════════════
+# ACAI v4 — Full Dependencies
+# Install: pip install -r requirements.txt
+#
+# NOTE: camel-tools and farasa require additional setup.
+# See bottom of this file for setup commands.
+# ═══════════════════════════════════════════════════════════
+
+# ─── Core API ─────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+python-multipart==0.0.12
+python-jose[cryptography]==3.3.0   # JWT
+passlib[bcrypt]==1.7.4             # Password hashing
+
+# ─── LLM & AI ─────────────────────────────────────────────
+anthropic==0.40.0                  # Claude API fallback
+langchain==0.3.7
+langchain-core==0.3.20
+langchain-anthropic==0.3.3
+langgraph==0.2.55                  # MoA stateful graphs
+openai==1.58.1                     # vLLM OpenAI-compatible client
+httpx==0.27.2                      # Async HTTP for Ollama/vLLM
+
+# ─── RAG & Vector DB ──────────────────────────────────────
+weaviate-client==4.9.0             # Weaviate v2 Python client
+sentence-transformers==3.3.1       # multilingual-e5-large embeddings
+llama-index==0.12.0                # Optional RAG framework
+haystack-ai==2.8.0                 # Haystack 2.x for RAG pipelines
+
+# ─── Knowledge Graph ──────────────────────────────────────
+neo4j==5.26.0                      # Async Neo4j driver
+
+# ─── Caching & Session ────────────────────────────────────
+redis==5.2.0                       # Redis async client
+hiredis==3.1.0                     # Fast Redis parser
+
+# ─── Database ─────────────────────────────────────────────
+asyncpg==0.30.0                    # PostgreSQL async
+sqlalchemy[asyncio]==2.0.36        # ORM
+
+# ─── Arabic NLP ───────────────────────────────────────────
+camel-tools==1.1.0                 # CAMeL Tools (NYU Abu Dhabi)
+farasapy==0.0.14                   # Farasa segmenter/POS (QCRI)
+# Note: camel-tools requires additional data download (see below)
+# Note: farasa requires Java 8+ installed
+
+# ─── ML & Fine-Tuning ─────────────────────────────────────
+torch==2.5.1                       # PyTorch (GPU)
+transformers==4.47.1               # HuggingFace transformers
+peft==0.14.0                       # LoRA/QLoRA adapter training
+trl==0.12.1                        # TRL for SFT/DPO training
+bitsandbytes==0.45.0               # 4-bit/8-bit quantization (QLoRA)
+accelerate==1.2.1                  # Multi-GPU training
+datasets==3.2.0                    # HuggingFace datasets
+evaluate==0.4.3                    # Evaluation metrics
+
+# ─── Document Processing ──────────────────────────────────
+pymupdf==1.25.0                    # PDF parsing (Arabic support)
+python-docx==1.1.2                 # DOCX parsing
+beautifulsoup4==4.12.3             # Web scraping
+lxml==5.3.0                        # XML/HTML parsing
+
+# ─── Rate Limiting ────────────────────────────────────────
+slowapi==0.1.9                     # FastAPI rate limiter
+
+# ─── Observability ────────────────────────────────────────
+prometheus-client==0.21.1          # Metrics
+structlog==24.4.0                  # Structured logging
+opentelemetry-sdk==1.29.0          # Tracing (optional)
+
+# ─── Search Tools ─────────────────────────────────────────
+tavily-python==0.5.0               # Tavily search API (fallback)
+
+# ─── Security ─────────────────────────────────────────────
+cryptography==44.0.0
+python-dotenv==1.0.1               # .env file loading
+
+# ─── Utilities ────────────────────────────────────────────
+aiofiles==24.1.0
+tenacity==9.0.0                    # Retry logic
+pyyaml==6.0.2
+ujson==5.10.0
+
+# ─── Testing ──────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx[test]==0.27.2
+
+# ═══════════════════════════════════════════════════════════
+# SETUP COMMANDS (run after pip install)
+# ═══════════════════════════════════════════════════════════
+#
+# 1. CAMeL Tools data models:
+#    python -c "from camel_tools.data import DataCatalogue; \
+#               DataCatalogue.download_package('msf-r13n'); \
+#               DataCatalogue.download_package('morphology-db-msa-r13');"
+#
+# 2. Ollama setup (local LLM):
+#    curl -fsSL https://ollama.ai/install.sh | sh
+#    ollama pull qwen2.5:72b         # Primary model (~46GB)
+#    ollama pull qwen3:8b            # Router model (~5GB)
+#    ollama pull hf.co/inceptionai/jais-family-30b-chat  # Arabic specialist
+#
+# 3. Docker services:
+#    docker-compose -f docker-compose.prod.yml up -d
+#
+# 4. Verify all services:
+#    python -c "from backend.main import app; print('FastAPI OK')"
+#    curl http://localhost:8000/api/health
+#    curl http://localhost:11434/api/tags
+# ═══════════════════════════════════════════════════════════
