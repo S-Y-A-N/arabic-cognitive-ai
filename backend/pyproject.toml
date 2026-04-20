@@ -1,0 +1,13 @@
+[project]
+name = "acai-backend"
+version = "0.1.0"
+description = "Arabic Cognitive AI backend"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dotenv>=0.9.9",
+    "duckduckgo-search>=8.1.1",
+    "fastapi>=0.136.0",
+    "httpx>=0.28.1",
+    "uvicorn>=0.44.0",
+]
