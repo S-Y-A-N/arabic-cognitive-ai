@@ -21,7 +21,6 @@ Install: pip install sqlite-fts4  (FTS5 is built into Python's sqlite3)
 
 import sqlite3
 import json
-import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple

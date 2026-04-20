@@ -7,8 +7,6 @@
 
 *University of Bahrain · College of Information Technology · Benefit AI Lab · 2026*
 
----
-
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat&logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react)](https://react.dev)
@@ -17,8 +15,6 @@
 
 </div>
 
----
-
 ## Overview
 
 ACAI is a production-grade, fully private Arabic AI platform built for Bahrain and the GCC. It enables users to interact with a cognitive multi-agent system using natural language in Arabic or English — with **zero data leaving the machine**.
@@ -26,8 +22,6 @@ ACAI is a production-grade, fully private Arabic AI platform built for Bahrain a
 No OpenAI. No cloud APIs. No data sovereignty risk.
 
 The system is the first to specifically target **Bahraini Arabic dialect** — providing dialect identification, morphological analysis, MSA normalisation, and GCC regulatory knowledge in a single unified platform.
-
----
 
 ## Key Features
 
@@ -74,8 +68,6 @@ Six specialist agents, each with a distinct role. The orchestrator routes every 
 - **MLR (MSA Leak Rate)** — measures formal Arabic contamination in dialect output
 - Neither metric exists in any prior Arabic NLP publication
 
----
-
 ## Benchmark Results
 
 *Evaluated April 2026 on Qwen2.5-14B running locally (CPU, no GPU)*
@@ -97,8 +89,6 @@ Six specialist agents, each with a distinct role. The orchestrator routes every 
 | GPT-4o | ~72% | ☁️ Cloud — sovereignty risk |
 | Jais-30B | ~65% | ☁️ Cloud — sovereignty risk |
 | **Qwen2.5-14B (ACAI)** | **87.5%** |  Local — data sovereign |
-
----
 
 ## Architecture
 
@@ -125,8 +115,6 @@ Six specialist agents, each with a distinct role. The orchestrator routes every 
                                │  qwen2.5:14b · bahraini-pro  │
                                └─────────────────────────────┘
 ```
-
----
 
 ## Tech Stack
 
@@ -157,7 +145,6 @@ Six specialist agents, each with a distinct role. The orchestrator routes every 
 | bahraini-pro (fine-tuned) | Dialect specialist model |
 | Hayrat A100 Cluster | QLoRA fine-tuning (University of Bahrain) |
 
----
 
 ## Project Structure
 
@@ -187,8 +174,6 @@ arabic-cognitive-ai/
 ├── slurm_finetune.sh           # QLoRA training job for Hayrat cluster
 └── acai_lab_setup.sh           # Lab GPU deployment script
 ```
-
----
 
 ## Quick Start
 
@@ -222,8 +207,6 @@ npm run dev
 
 Open `http://localhost:5173`
 
----
-
 ## Environment Configuration
 
 ```env
@@ -236,8 +219,6 @@ ANTHROPIC_API_KEY=              # Optional — enables live web search for با�
 ```
 
 The `ANTHROPIC_API_KEY` is optional. Without it, the Researcher agent falls back to DuckDuckGo.
-
----
 
 ## API Reference
 
@@ -294,8 +275,6 @@ GET /api/health
 | `/api/memory/search` | POST | Search past conversations |
 | `/api/eval/dcr` | GET | Run DCR + MLR evaluation |
 
----
-
 ## Bahraini Dialect Support
 
 The `لغوي` agent provides structured linguistic analysis for any Arabic input:
@@ -323,8 +302,6 @@ The `لغوي` agent provides structured linguistic analysis for any Arabic inpu
 | شلون | كيف | how |
 | وين | أين | where |
 
----
-
 ## Running Tests
 
 ```bash
@@ -336,8 +313,6 @@ python tests/test_acai.py -v
 - Orchestrator: intent routing, pipeline building, output merging
 - Skill generator: quality threshold, step extraction
 - Security: no keys in frontend
-
----
 
 ## Running Benchmarks
 
@@ -356,8 +331,6 @@ python eval/experiments.py --all
 ```
 
 Results saved to `results/` as JSON.
-
----
 
 ## Fine-Tuning
 
@@ -380,8 +353,6 @@ The `لغوي` agent is being fine-tuned on Bahraini dialect data using QLoRA on
 
 See `slurm_finetune.sh` for the complete training job.
 
----
-
 ## Research Context
 
 **Target venue:** ArabicNLP 2026 workshop (co-located with EMNLP 2026)
@@ -399,8 +370,6 @@ See `slurm_finetune.sh` for the complete training job.
 - Fine-Tuning Arabic LLMs, PLOS ONE (Feb 2026) — validates knowledge distillation approach
 - Hermes Agent, Nous Research (Feb 2026) — persistent memory architecture reference
 
----
-
 ## Security Notes
 
 Before any institutional deployment:
@@ -410,16 +379,12 @@ Before any institutional deployment:
 - All AI API keys live server-side only — frontend has zero secrets
 - Rate limiting prevents abuse (40 req/min per IP)
 
----
-
 ## Acknowledgements
 
 University of Bahrain · College of Information Technology · Benefit AI Lab
 
 Built with FastAPI, React, SQLite, Ollama, and the open-source Arabic NLP community.
 
----
-
 ## License
 
-MIT License — see `LICENSE`.
+MIT License.

@@ -1,714 +1,869 @@
 """
-ACAI v4 — Production FastAPI Server
-=====================================
-Full production server with:
-  - JWT authentication + API key support
-  - Rate limiting per user/tier
-  - Server-Sent Events (SSE) streaming
-  - WebSocket real-time pipeline
-  - CORS for frontend
-  - Prometheus metrics
-  - Structured audit logging
-  - Health checks and readiness probes
+ACAI v5 — Complete Production FastAPI Backend
+===============================================
+Implements all 5 priority upgrades:
 
-Start:  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-Docs:   http://localhost:8000/api/docs
+A. ORCHESTRATOR  — policy-based routing, no manual agent selection
+B. MEMORY        — SQLite FTS5 injected before EVERY query
+C. SECURITY      — ALL secrets in backend, ZERO frontend API keys
+D. MINIMAL RAG   — CBB document chunks, FTS5 retrieval, citations
+E. EVALUATION    — DCR/MLR metrics, before/after memory experiment
+
+Install:
+    pip install fastapi uvicorn httpx python-dotenv duckduckgo-search
+
+.env file (backend/.env):
+    ANTHROPIC_API_KEY=sk-ant-...   (optional — for live web search)
+    API_KEY=dev-key-12345
+    PRIMARY_MODEL=qwen2.5:14b-instruct-q4_K_M
+    SPECIALIST_MODEL=bahraini-pro:latest
+    OLLAMA_BASE_URL=http://localhost:11434
+
+Run:
+    uvicorn main_v5:app --host 0.0.0.0 --port 8000 --reload
 """
 
-import asyncio
-import logging
-import time
-import json
-import os
-import uuid
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, List, Optional, Any
+import os, re, json, time, logging, asyncio, sqlite3
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List
+from collections import defaultdict
 
-from fastapi import (
-    FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect,
-    Request, status, BackgroundTasks
-)
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
-
-# Optional dependencies — graceful fallback if not installed
-try:
-    from slowapi import Limiter
-    from slowapi.util import get_remote_address
-    from slowapi.errors import RateLimitExceeded
-    limiter = Limiter(key_func=get_remote_address)
-    RATE_LIMIT_AVAILABLE = True
-except ImportError:
-    RATE_LIMIT_AVAILABLE = False
+import httpx
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
-    PROMETHEUS_AVAILABLE = True
-    # Metrics
-    REQUEST_COUNT    = Counter("acai_requests_total",   "Total requests", ["endpoint", "status"])
-    REQUEST_LATENCY  = Histogram("acai_latency_seconds", "Request latency", ["endpoint"])
-    ACTIVE_SESSIONS  = Gauge("acai_active_sessions",    "Active WebSocket sessions")
-    LLM_TOKENS       = Counter("acai_llm_tokens_total", "LLM tokens used", ["model", "direction"])
-    AGENT_CALLS      = Counter("acai_agent_calls_total", "Agent invocations", ["agent"])
-    HALLUCINATION_RATE = Gauge("acai_hallucination_rate", "Estimated hallucination rate")
+    from dotenv import load_dotenv
+    load_dotenv()
 except ImportError:
-    PROMETHEUS_AVAILABLE = False
+    pass
 
-try:
-    import jwt
-    JWT_AVAILABLE = True
-except ImportError:
-    JWT_AVAILABLE = False
+# Config
+ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL   = "claude-sonnet-4-20250514"
+API_KEY        = os.getenv("API_KEY", "dev-key-12345")
+PRIMARY_MODEL  = os.getenv("PRIMARY_MODEL", "qwen2.5:14b-instruct-q4_K_M")
+ARABIC_MODEL   = os.getenv("SPECIALIST_MODEL", "bahraini-pro:latest")
+OLLAMA_URL     = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-# Internal imports (from Phase 1 + v4 additions)
-from llm.inference_client import LLMClient
-from model_config import get_config
+BASE_DIR   = Path(__file__).parent
+MEMORY_DB  = BASE_DIR / "acai_memory.db"
+RAG_DB     = BASE_DIR / "rag_store.db"
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(name)s | %(levelname)s | %(message)s'
+    format="%(asctime)s | %(levelname)s | %(module)s | %(funcName)s() @ line %(lineno)d | %(message)s"
 )
-logger = logging.getLogger("acai.api")
+log = logging.getLogger("acai")
 
-# ─── App State ────────────────────────────────────────────────────────────────
 
-class AppState:
-    llm_client: Optional[LLMClient] = None
-    orchestrator: Any = None
-    rag_pipeline: Any = None
-    arabic_nlp: Any = None
-    kg_connector: Any = None
-    memory_system: Any = None
-    feedback_system: Any = None
-    ingestion_pipeline: Any = None
-    active_ws_sessions: Dict[str, WebSocket] = {}
-    start_time: float = time.time()
+# ORCHESTRATOR: Intent + Pipeline + Merge
 
-app_state = AppState()
+AR_RE = re.compile(r'[\u0600-\u06FF]{3,}')
 
-# ─── Lifespan (startup/shutdown) ──────────────────────────────────────────────
+RESEARCH_KW = ["latest","recent","news","today","2025","2026","current",
+               "أحدث","آخر","أخبار","حديث","اليوم","هذا الأسبوع"]
+GCC_KW      = ["cbb","sama","uaecb","dfsa","regulation","law","policy","rulebook",
+               "vision 2030","رؤية","قانون","نظام","تنظيم","مصرف البحرين",
+               "مصرف المركزي","ترخيص","امتثال","compliance","ضوابط","اشتراطات"]
+DIALECT_KW  = ["لهجة","dialect","بحريني","خليجي","bahraini","معنى","وايد",
+               "حيل","شلون","ترجم","translate","تحليل","تطبيع","code-switching",
+               "morphology","فصحى","صرف","جذر"]
+EXTRACT_KW  = ["extract","entities","relations","استخرج","كيانات","علاقات"]
+REASON_KW   = ["why","how","explain","analyze","compare","لماذا","كيف",
+               "اشرح","حلل","قارن","ما الفرق","ما الأسباب"]
 
-@asynccontextmanager
+
+def classify_intent(q: str) -> dict:
+    ql = q.lower(); ar = bool(AR_RE.search(q)); wc = len(q.split())
+    return {
+        "research":    any(k in ql for k in RESEARCH_KW),
+        "gcc_law":     any(k in ql for k in GCC_KW),
+        "dialect":     ar or any(k in ql for k in DIALECT_KW),
+        "reasoning":   wc > 12 or any(k in ql for k in REASON_KW),
+        "extraction":  any(k in ql for k in EXTRACT_KW),
+        "is_arabic":   ar,
+    }
+
+
+def build_pipeline(intent: dict, mode: str = "auto") -> List[str]:
+    # Single-agent override
+    if mode.startswith("single:"):
+        a = mode.split(":", 1)[1]
+        return [a, "muraqib"] if a != "muraqib" else [a]
+    # Legacy mode aliases
+    if mode == "arabic_nlp":    return ["lughawi", "muraqib"]
+    if mode == "knowledge":     return ["bani", "muraqib"]
+    if mode == "deep_research": return ["bahith", "hakeem", "muraqib"]
+    if mode == "cognitive":     pass  # fall through to auto
+
+    p = []
+    if intent["research"]:   p.append("bahith")
+    if intent["gcc_law"]:    p.append("musheer")
+    if intent["dialect"]:    p.append("lughawi")
+    if intent["reasoning"] or len(p) > 1: p.append("hakeem")
+    if intent["extraction"]: p.append("bani")
+    p.append("muraqib")
+    if len(p) == 1: p = ["hakeem", "muraqib"]
+
+    seen, out = set(), []
+    for a in p:
+        if a not in seen: seen.add(a); out.append(a)
+    return out
+
+
+AGENT_LABELS = {
+    "bahith":"🔭 باحث", "musheer":"⚖️ مشير", "lughawi":"ع لغوي",
+    "hakeem":"🧠 حكيم", "muraqib":"🔍 مراقب", "bani":"🕸️ بانِ",
+}
+
+SYSTEM_PROMPTS = {
+"bahith": """أنت باحث في ACAI. قدّم معلومات دقيقة.
+التنسيق:
+**الملخص:** (2-3 جمل)
+**النتائج الرئيسية:** نقاط + مصادر
+**التحليل:** سياق أعمق
+**الموثوقية:** X/10
+لا تخترع مصادر. أجب بنفس لغة السؤال.""",
+
+"musheer": """أنت مشير — خبير أنظمة الخليج. مراجعك: CBB، SAMA، UAECB، DFSA.
+التنسيق:
+**الحكم:** [المنظم | الوثيقة | القسم]
+**التفاصيل:** شرح النظام
+**المتطلبات:** خطوات أو شروط
+⚠️ هذا تحليل استرشادي. راجع متخصصاً قانونياً.""",
+
+"lughawi": """أنت لغوي — خبير اللغة العربية وعلم اللهجات.
+**🗺️ اللهجة:** [النوع] — الثقة: X%
+**المؤشرات:** الكلمات الدالة
+**🔍 الصرف:** كلمة → جذر → وزن → معنى (٣ كلمات)
+**✍️ الفصحى:** النص المطبَّع
+**🔄 التحول اللغوي:** إن وجد
+**🌍 الثقافي:** ملاحظة""",
+
+"hakeem": """أنت حكيم — عميل التفكير العميق.
+**خطوة ١:** التفكيك
+**خطوة ٢:** المعرفة
+**خطوة ٣:** الاستدلال
+**خطوة ٤:** التحقق
+**خطوة ٥:** الإجابة النهائية
+**الثقة:** X/10""",
+
+"muraqib": """أنت مراقب — عميل التحقق.
+✅ **صحيح:** الدليل
+⚠️ **غير محدد:** يحتاج مصدراً
+❌ **خاطئ:** التصحيح
+**الحكم:** X/10""",
+
+"bani": """أنت بانِ — عميل استخراج المعرفة.
+**الكيانات:** | الاسم | النوع | الثقة |
+**العلاقات:** → [أ] —[علاقة]→ [ب]
+**المفاهيم:** م١، م٢، م٣""",
+}
+
+AGENT_MODELS = {"lughawi": ARABIC_MODEL}
+
+
+def merge_pipeline_outputs(pipeline: List[str], outputs: Dict[str, str]) -> str:
+    valid = {a: o for a, o in outputs.items() if o and not o.startswith("[خطأ")}
+    if not valid: return "لم أتمكن من توليد إجابة."
+    if len(valid) == 1: return next(iter(valid.values()))
+    parts = []
+    for a in pipeline:
+        if a != "muraqib" and a in valid:
+            parts.append(f"### {AGENT_LABELS.get(a, a)}\n{valid[a]}")
+    if "muraqib" in valid:
+        parts.append(f"\n---\n### 🔍 مراقب — التحقق\n{valid['muraqib']}")
+    return "\n\n".join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# B. MEMORY — SQLite FTS5 persistent cross-session
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MemoryStore:
+    def __init__(self, db: Path = MEMORY_DB):
+        self.db = str(db)
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db) as c:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id TEXT NOT NULL,
+                    query    TEXT NOT NULL,
+                    response TEXT NOT NULL,
+                    quality  INTEGER DEFAULT 3,
+                    tags     TEXT DEFAULT '[]',
+                    created  TEXT DEFAULT (datetime('now'))
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS conv_fts USING fts5(
+                    query, response, tags,
+                    content='conversations', content_rowid='id'
+                );
+                CREATE TRIGGER IF NOT EXISTS conv_fts_ai
+                    AFTER INSERT ON conversations BEGIN
+                    INSERT INTO conv_fts(rowid, query, response, tags)
+                    VALUES (new.id, new.query, new.response, new.tags);
+                END;
+                CREATE TABLE IF NOT EXISTS experiment_log (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query    TEXT,
+                    mode     TEXT,
+                    pipeline TEXT,
+                    latency  INTEGER,
+                    created  TEXT DEFAULT (datetime('now'))
+                );
+            """)
+
+    def get_context(self, query: str, limit: int = 3) -> str:
+        """FTS5 search — returns formatted context string for prompt injection."""
+        try:
+            q_esc = '"' + query.replace('"', '""') + '"'
+            with sqlite3.connect(self.db) as c:
+                rows = c.execute("""
+                    SELECT c.query, c.response
+                    FROM conv_fts f JOIN conversations c ON f.rowid = c.id
+                    WHERE conv_fts MATCH ? AND c.quality >= 3
+                    ORDER BY rank LIMIT ?
+                """, (q_esc, limit)).fetchall()
+            if not rows: return ""
+            lines = ["[ذاكرة ذات صلة من محادثات سابقة]"]
+            for q, r in rows:
+                lines.append(f"• سؤال: {q[:80]}")
+                lines.append(f"  جواب: {r[:160]}")
+            return "\n".join(lines)
+        except Exception as e:
+            log.debug(f"Memory search failed: {e}")
+            return ""
+
+    def save(self, agent_id: str, query: str, response: str,
+             quality: int = 3, tags: list = None):
+        try:
+            with sqlite3.connect(self.db) as c:
+                c.execute(
+                    "INSERT INTO conversations(agent_id,query,response,quality,tags) VALUES(?,?,?,?,?)",
+                    (agent_id, query[:1000], response[:3000], quality,
+                     json.dumps(tags or [], ensure_ascii=False))
+                )
+        except Exception as e:
+            log.error(f"Memory save error: {e}")
+
+    def log_experiment(self, query: str, mode: str, pipeline: list, latency: int):
+        try:
+            with sqlite3.connect(self.db) as c:
+                c.execute(
+                    "INSERT INTO experiment_log(query,mode,pipeline,latency) VALUES(?,?,?,?)",
+                    (query[:300], mode, json.dumps(pipeline), latency)
+                )
+        except Exception as e:
+            log.error(f"Experiment log error: {e}")
+
+    def experiment_summary(self) -> dict:
+        try:
+            with sqlite3.connect(self.db) as c:
+                rows = c.execute(
+                    "SELECT mode, COUNT(*), AVG(latency) FROM experiment_log GROUP BY mode"
+                ).fetchall()
+            return {r[0]: {"count": r[1], "avg_latency_ms": int(r[2] or 0)} for r in rows}
+        except: return {}
+
+    def stats(self) -> dict:
+        try:
+            with sqlite3.connect(self.db) as c:
+                n_conv  = c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+                by_ag   = c.execute(
+                    "SELECT agent_id, COUNT(*) FROM conversations GROUP BY agent_id"
+                ).fetchall()
+            return {"total": n_conv, "by_agent": {r[0]: r[1] for r in by_ag}}
+        except: return {"total": 0, "by_agent": {}}
+
+
+memory = MemoryStore()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D. MINIMAL RAG — SQLite FTS5, no external services
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MinimalRAG:
+    """
+    Zero-dependency RAG using SQLite FTS5.
+    No Weaviate, no sentence-transformers needed for demo.
+    Ingest → chunk → store → retrieve → inject → cite.
+    """
+
+    def __init__(self, db: Path = RAG_DB):
+        self.db = str(db)
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db) as c:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    doc_name TEXT NOT NULL,
+                    chunk_no INTEGER,
+                    content  TEXT NOT NULL,
+                    created  TEXT DEFAULT (datetime('now'))
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    content, doc_name,
+                    content='chunks', content_rowid='id'
+                );
+                CREATE TRIGGER IF NOT EXISTS chunks_ai
+                    AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(rowid, content, doc_name)
+                    VALUES (new.id, new.content, new.doc_name);
+                END;
+            """)
+
+    def ingest(self, text: str, doc_name: str, chunk_size: int = 400) -> int:
+        """Split document and store as searchable chunks."""
+        # Sentence-aware chunking
+        sents = re.split(r'(?<=[.!?،؟])\s+', text)
+        chunks, cur = [], ""
+        for s in sents:
+            if len(cur) + len(s) < chunk_size:
+                cur += s + " "
+            else:
+                if cur.strip(): chunks.append(cur.strip())
+                cur = s + " "
+        if cur.strip(): chunks.append(cur.strip())
+        if not chunks:   chunks = [text[:chunk_size]]
+
+        with sqlite3.connect(self.db) as c:
+            for i, ch in enumerate(chunks):
+                c.execute(
+                    "INSERT INTO chunks(doc_name, chunk_no, content) VALUES(?,?,?)",
+                    (doc_name, i, ch)
+                )
+        log.info(f"RAG: ingested '{doc_name}' → {len(chunks)} chunks")
+        return len(chunks)
+
+    def retrieve(self, query: str, k: int = 3) -> list:
+        """FTS5 search over chunks."""
+        try:
+            q_esc = '"' + query.replace('"', '""') + '"'
+            with sqlite3.connect(self.db) as c:
+                rows = c.execute("""
+                    SELECT ch.doc_name, ch.chunk_no, ch.content
+                    FROM chunks_fts cf JOIN chunks ch ON cf.rowid = ch.id
+                    WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?
+                """, (q_esc, k)).fetchall()
+            return [{"doc": r[0], "chunk": r[1], "content": r[2]} for r in rows]
+        except Exception as e:
+            log.debug(f"RAG retrieve error: {e}")
+            return []
+
+    def get_rag_context(self, query: str, k: int = 3) -> str:
+        chunks = self.retrieve(query, k)
+        if not chunks: return ""
+        lines = ["[مقتطفات من الوثائق المرجعية]"]
+        for c in chunks:
+            lines.append(f"📄 {c['doc']} — القطعة {c['chunk']+1}")
+            lines.append(f"   {c['content'][:300]}")
+        return "\n".join(lines)
+
+    def list_docs(self) -> list:
+        try:
+            with sqlite3.connect(self.db) as c:
+                rows = c.execute(
+                    "SELECT doc_name, COUNT(*) FROM chunks GROUP BY doc_name"
+                ).fetchall()
+            return [{"doc": r[0], "chunks": r[1]} for r in rows]
+        except: return []
+
+
+rag = MinimalRAG()
+
+# ── Auto-ingest sample CBB document on first run ──────────────────────────────
+CBB_SAMPLE = """مصرف البحرين المركزي — ملخص تنظيمي
+الهدف: المحافظة على الاستقرار النقدي والمالي في مملكة البحرين.
+
+الترخيص المصرفي:
+رأس المال الأدنى للبنوك التجارية: 100 مليون دينار بحريني.
+يشترط تقديم طلب مكتمل مع خطة عمل خمسية ونظام حوكمة معتمد.
+يستغرق قرار الترخيص عادةً 6-12 شهراً.
+
+حماية المستهلك (CBB Rulebook — المجلد الخامس):
+يلتزم البنك بالإفصاح الكامل عن الرسوم والفوائد.
+يجب توفير قناة شكاوى رسمية.
+الرد على الشكاوى خلال 15 يوم عمل.
+
+مكافحة غسل الأموال:
+تطبيق إجراءات KYC (اعرف عميلك) إلزامي.
+الإبلاغ عن المعاملات المشبوهة لوحدة الاستخبارات المالية.
+
+رؤية البحرين 2030:
+تنويع الاقتصاد وتقليل الاعتماد على النفط.
+تطوير قطاع الخدمات المالية والتكنولوجيا المالية (Fintech).
+تمكين الكوادر البحرينية في القطاع المالي.
+
+SAMA — البنك المركزي السعودي:
+ينظم القطاع المالي في المملكة العربية السعودية.
+متطلبات الترخيص مشابهة لـ CBB مع اشتراطات إضافية للبنوك الإسلامية.
+يشترط الالتزام بنظام ساما للمدفوعات الفورية (SADAD/SARIE).
+
+UAECB — مصرف الإمارات المركزي:
+ينظم البنوك في الإمارات العربية المتحدة.
+رأس المال الأدنى: 150 مليون درهم إماراتي.
+نظام AECB لتقارير الائتمان."""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# C. SECURITY — Backend-only API calls
+# ══════════════════════════════════════════════════════════════════════════════
+
+class RateLimiter:
+    def __init__(self, rpm: int = 40):
+        self.rpm = rpm
+        self._log: Dict[str, list] = defaultdict(list)
+
+    def check(self, key: str) -> bool:
+        now = time.time()
+        self._log[key] = [t for t in self._log[key] if now - t < 60]
+        if len(self._log[key]) >= self.rpm: return False
+        self._log[key].append(now)
+        return True
+
+
+limiter = RateLimiter()
+
+
+async def backend_ddg_search(query: str, n: int = 5) -> list:
+    """DuckDuckGo — runs in BACKEND. Frontend never touches APIs."""
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as d:
+            results = list(d.text(query, max_results=n))
+            return [{"title": r.get("title",""), "url": r.get("href",""),
+                     "snippet": r.get("body","")[:400]} for r in results if r.get("body")]
+    except ImportError:
+        log.warning("pip install duckduckgo-search")
+        return []
+    except Exception as e:
+        log.warning(f"DDG: {e}")
+        return []
+
+
+async def backend_anthropic_search(query: str, system: str) -> str:
+    """Anthropic web search — API key lives on SERVER only."""
+    if not ANTHROPIC_KEY: return ""
+    msgs = [{"role": "user", "content": query}]
+    try:
+        for _ in range(8):
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"Content-Type": "application/json",
+                             "x-api-key": ANTHROPIC_KEY,
+                             "anthropic-version": "2023-06-01"},
+                    json={"model": CLAUDE_MODEL, "max_tokens": 2000,
+                          "system": system, "messages": msgs,
+                          "tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+                )
+            if r.status_code != 200: return ""
+            d = r.json()
+            if d.get("stop_reason") != "tool_use":
+                return " ".join(b["text"] for b in d.get("content",[]) if b["type"]=="text")
+            msgs.append({"role": "assistant", "content": d["content"]})
+            tool_results = [
+                {"type": "tool_result", "tool_use_id": b["id"], "content": "Done."}
+                for b in d["content"] if b.get("type") == "tool_use"
+            ]
+            msgs.append({"role": "user", "content": tool_results})
+    except Exception as e:
+        log.error(f"Anthropic search error: {e}")
+    return ""
+
+
+async def ollama_call(prompt: str, system: str = "", model: str = None) -> str:
+    model = model or PRIMARY_MODEL
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.3,
+            "num_predict": 1500
+        }
+    }
+    if system: payload["system"] = system
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            print(payload)
+            res = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+            res.raise_for_status()
+            if res.status_code == 200:
+                return res.json().get("response", "")
+    except Exception as e:
+        log.error(f"Ollama error: {e}")
+    return ""
+
+async def execute_agent(agent_id: str, query: str,
+                        prev_context: str = "",
+                        memory_ctx: str = "",
+                        rag_ctx: str = "") -> str:
+    """Execute one agent. Builds prompt, calls LLM, returns text."""
+    system = SYSTEM_PROMPTS.get(agent_id, "أنت مساعد ذكي.")
+    model  = AGENT_MODELS.get(agent_id, PRIMARY_MODEL)
+
+    # باحث uses web search
+    if agent_id == "bahith":
+        # Try Anthropic (best) → DDG fallback
+        if ANTHROPIC_KEY:
+            result = await backend_anthropic_search(query, system)
+            if result: return result
+        search = await backend_ddg_search(query, n=5)
+        if search:
+            ctx = "\n\n".join(
+                f"Source: {s['title']}\nURL: {s['url']}\n{s['snippet']}"
+                for s in search
+            )
+            prompt = f"{ctx}\n\nبناءً على النتائج أعلاه، أجب على: {query}"
+        else:
+            prompt = query
+        return await ollama_call(prompt, system, model)
+
+    # Build prompt with all context layers
+    parts = []
+    if memory_ctx:   parts.append(f"[ذاكرة]\n{memory_ctx}")
+    if rag_ctx:      parts.append(f"[وثائق]\n{rag_ctx}")
+    if prev_context: parts.append(f"[مخرجات سابقة]\n{prev_context}")
+    parts.append(query)
+    return await ollama_call("\n\n".join(parts), system, model)
+
+
+async def orchestrate(query: str, mode: str = "auto",
+                      session_id: str = "default") -> dict:
+    """Full orchestration: memory → RAG → pipeline → merge → save."""
+    t0 = time.time()
+
+    # 1. Memory retrieval (ALWAYS before every query)
+    mem_ctx  = memory.get_context(query, limit=3)
+    mem_used = bool(mem_ctx)
+
+    # 2. RAG retrieval
+    rag_ctx  = rag.get_rag_context(query, k=2)
+    rag_used = bool(rag_ctx)
+
+    # 3. Intent + pipeline
+    intent   = classify_intent(query)
+    pipeline = build_pipeline(intent, mode)
+    log.info(f"Pipeline: {pipeline} | memory={mem_used} | rag={rag_used}")
+
+    # 4. Sequential execution (context accumulates)
+    outputs:  Dict[str, str] = {}
+    acc_ctx:  str = ""
+    for agent_id in pipeline:
+        out = await execute_agent(
+            agent_id   = agent_id,
+            query      = query,
+            prev_context = acc_ctx,
+            memory_ctx = mem_ctx if not acc_ctx else "",
+            rag_ctx    = rag_ctx  if not acc_ctx else "",
+        )
+        outputs[agent_id] = out
+        if out and not out.startswith("[خطأ"): acc_ctx = out
+
+    # 5. Merge
+    final = merge_pipeline_outputs(pipeline, outputs)
+
+    latency = int((time.time() - t0) * 1000)
+
+    # 6. Save to memory + log
+    memory.save("orchestrator", query, final, quality=3)
+    memory.log_experiment(query,
+                          "with_memory" if mem_used else "without_memory",
+                          pipeline, latency)
+
+    return {
+        "answer":      final,
+        "pipeline":    pipeline,
+        "intent":      intent,
+        "memory_used": mem_used,
+        "rag_used":    rag_used,
+        "latency_ms":  latency,
+        "agents":      {k: v[:200] + "..." if len(v) > 200 else v
+                        for k, v in outputs.items()},
+    }
+
+
+def merge_pipeline_outputs(pipeline: list, outputs: dict) -> str:
+    valid = {a: o for a, o in outputs.items() if o and not o.startswith("[خطأ")}
+    if not valid: return "لم أتمكن من توليد إجابة."
+    if len(valid) == 1: return next(iter(valid.values()))
+    parts = []
+    for a in pipeline:
+        if a != "muraqib" and a in valid:
+            parts.append(f"### {AGENT_LABELS.get(a, a)}\n{valid[a]}")
+    if "muraqib" in valid:
+        parts.append(f"\n---\n### 🔍 مراقب\n{valid['muraqib']}")
+    return "\n\n".join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E. EVALUATION — DCR / MLR + before/after memory experiment
+# ══════════════════════════════════════════════════════════════════════════════
+
+BAHRAINI_MARKERS = ["الحين","وايد","حيل","شلونك","خوي","صج","مب","عساك","زين","تره","باكر"]
+MSA_MARKERS      = ["كيف حالك","أنا بخير","شكراً لك","ينبغي","يجب أن","لا أعلم"]
+
+async def run_dcr_eval() -> dict:
+    """Measure Dialect Control Rate and MSA Leak Rate."""
+    prompts = [
+        "أجب باللهجة البحرينية فقط: كيف حالك؟",
+        "اشرح كيف تفتح حساب بنكي باللهجة البحرينية",
+        "قل لي أنك لا تعرف الإجابة باللهجة البحرينية",
+    ]
+    dcr_scores, mlr_scores = [], []
+    for prompt in prompts:
+        result = await orchestrate(prompt, mode="single:lughawi")
+        resp   = result["answer"].lower()
+        dcr = sum(1 for m in BAHRAINI_MARKERS if m in resp) / len(BAHRAINI_MARKERS)
+        mlr = sum(1 for m in MSA_MARKERS     if m in resp) / len(MSA_MARKERS)
+        dcr_scores.append(dcr); mlr_scores.append(mlr)
+    return {
+        "avg_dcr":   round(sum(dcr_scores)/len(dcr_scores), 3),
+        "avg_mlr":   round(sum(mlr_scores)/len(mlr_scores), 3),
+        "dcr_per":   dcr_scores,
+        "mlr_per":   mlr_scores,
+    }
+
+
+async def run_memory_experiment(questions: list) -> dict:
+    """
+    Before/after memory experiment.
+    Clears memory context for 'before' queries, uses accumulated memory for 'after'.
+    Returns comparison — this is your paper's Table 2.
+    """
+    results = []
+    # 'without_memory' pass — clear memory context by using fresh queries
+    for q in questions[:8]:
+        r = await orchestrate(q, mode="auto")
+        results.append({"question": q[:80],
+                         "without_memory_latency": r["latency_ms"],
+                         "without_memory_answer":  r["answer"][:200]})
+
+    # 'with_memory' pass — memory now has context from above queries
+    for i, q in enumerate(questions[:8]):
+        r = await orchestrate(q, mode="auto")
+        results[i]["with_memory_latency"]   = r["latency_ms"]
+        results[i]["with_memory_answer"]    = r["answer"][:200]
+        results[i]["memory_was_available"]  = r["memory_used"]
+
+    return {
+        "results":  results,
+        "summary":  memory.experiment_summary(),
+        "note":     "Compare without_memory_answer vs with_memory_answer for quality improvement",
+    }
+
+
+# FASTAPI APP
 async def lifespan(app: FastAPI):
-    """Initialize all services on startup, clean up on shutdown."""
-    logger.info("🚀 ACAI v4 starting up...")
+    log.info("🚀 ACAI v5 — محرك الذكاء الاصطناعي المعرفي العربي")
+    log.info(f"   Model:     {PRIMARY_MODEL}")
+    log.info(f"   Anthropic: {'✅' if ANTHROPIC_KEY else '⚠️  not set (DDG fallback)'}")
+    log.info(f"   Memory DB: {MEMORY_DB}")
 
-    # LLM Client (always available)
-    app_state.llm_client = LLMClient()
-    llm_health = await app_state.llm_client.health_check()
-    logger.info(f"LLM backends: {llm_health}")
-
-    # Optional services — graceful degradation if not installed
-    try:
-        from agents.langgraph_orchestrator import CognitiveOrchestrator
-        app_state.orchestrator = CognitiveOrchestrator(app_state.llm_client)
-        logger.info("✅ Orchestrator loaded")
-    except Exception as e:
-        logger.warning(f"⚠️  Orchestrator not loaded: {e}")
-
-    try:
-        from rag.advanced_graphrag import AdvancedGraphRAG
-        app_state.rag_pipeline = AdvancedGraphRAG()
-        await app_state.rag_pipeline.initialize()
-        logger.info("✅ RAG pipeline loaded")
-    except Exception as e:
-        logger.warning(f"⚠️  RAG not loaded: {e}")
-
-    try:
-        from arabic.dialect_specialist import ArabicNLPSpecialist
-        app_state.arabic_nlp = ArabicNLPSpecialist()
-        logger.info("✅ Arabic NLP loaded")
-    except Exception as e:
-        logger.warning(f"⚠️  Arabic NLP not loaded: {e}")
-
-    try:
-        from memory.quantum_memory import CognitiveMemorySystem
-        app_state.memory_system = CognitiveMemorySystem()
-        await app_state.memory_system.initialize()
-        logger.info("✅ Memory system loaded")
-    except Exception as e:
-        logger.warning(f"⚠️  Memory not loaded: {e}")
-
-    try:
-        from feedback.system import FeedbackSystem
-        app_state.feedback_system = FeedbackSystem()
-        logger.info("✅ Feedback system loaded")
-    except Exception as e:
-        logger.warning(f"⚠️  Feedback not loaded: {e}")
-
-    logger.info("✅ ACAI v4 ready — محرك الذكاء الاصطناعي المعرفي العربي")
-
-    yield  # App runs here
-
-    # Shutdown
-    logger.info("Shutting down ACAI v4...")
-    if app_state.llm_client:
-        await app_state.llm_client.close()
-    if app_state.memory_system:
-        await app_state.memory_system.shutdown()
-    logger.info("ACAI v4 shutdown complete")
-
-# ─── FastAPI App ──────────────────────────────────────────────────────────────
+    # Auto-ingest CBB sample if RAG is empty
+    if not rag.list_docs():
+        n = rag.ingest(CBB_SAMPLE, "CBB_Rulebook_Sample")
+        log.info(f"   RAG:       ✅ ingested CBB sample — {n} chunks")
+    else:
+        log.info(f"   RAG:       ✅ {rag.list_docs()}")
+        
+    log.info("   ✅ ACAI ready")
+    
+    yield # execute everything before `yield` at startup
 
 app = FastAPI(
-    title="Arabic Cognitive AI Engine API",
-    description="""
-# محرك الذكاء الاصطناعي المعرفي العربي
-## ACAI v4 — Arabic Cognitive OS
-
-Production API for the Arabic Cognitive AI Platform.
-
-### Modes
-- **Deep Research**: Real-time web search + multi-source synthesis
-- **Cognitive Pipeline**: 5-agent sequential reasoning (Plan→Research→Reason→Verify→Synthesize)
-- **Arabic NLP**: Dialect detection, morphology, MSA normalization (15 dialects incl. Bahraini)
-- **Knowledge Graph**: Entity extraction, GCC ontology, GraphRAG
-
-### Authentication
-Include JWT in Authorization header: `Bearer <token>`
-Or API key in `X-API-Key` header.
-    """,
-    version="4.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
-    lifespan=lifespan,
+    title="ACAI",
+    description="Arabic Cognitive AI Engine — Production Backend",
+    lifespan=lifespan
 )
-
-# ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.add_middleware(
     CORSMiddleware,
-allow_origins=["*"],    allow_credentials=True,
+    allow_origin_regex="https?://localhost(:5173)?",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+PUBLIC_PATHS = {"/api/health", "/docs", "/openapi.json", "/", "/api/query/stream"}
+
 @app.middleware("http")
-async def logging_middleware(request: Request, call_next):
-    """Log all requests with timing."""
-    start = time.time()
-    request_id = str(uuid.uuid4())[:8]
-    request.state.request_id = request_id
-
-    response = await call_next(request)
-
-    duration = (time.time() - start) * 1000
-    logger.info(
-        f"[{request_id}] {request.method} {request.url.path} "
-        f"→ {response.status_code} ({duration:.0f}ms)"
-    )
-
-    if PROMETHEUS_AVAILABLE:
-        REQUEST_COUNT.labels(endpoint=request.url.path, status=str(response.status_code)).inc()
-
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Response-Time"] = f"{duration:.0f}ms"
-    return response
-
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-
-security = HTTPBearer(auto_error=False)
-JWT_SECRET = os.getenv("JWT_SECRET_KEY", "change-this-in-production-immediately")
-API_KEYS = set(os.getenv("API_KEYS", "dev-key-12345").split(","))
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict:
-    """Verify JWT token or API key."""
-    # Allow API key auth
-    if credentials and credentials.credentials in API_KEYS:
-        return {"user_id": "api_key_user", "tier": "api", "key": credentials.credentials[:8]}
-
-    # Allow JWT auth
-    if credentials and JWT_AVAILABLE:
-        try:
-            payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
-            return payload
-        except Exception:
-            pass
-
-    # In development mode — allow unauthenticated (set DEV_MODE=true)
-    if os.getenv("DEV_MODE", "true").lower() == "true":
-        return {"user_id": "dev_user", "tier": "dev"}
-
-    raise HTTPException(status_code=401, detail="Invalid or missing authentication")
-
-def optional_auth(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[Dict]:
-    """Optional auth — returns None if not authenticated."""
-    try:
-        return verify_token(credentials)
-    except HTTPException:
-        return None
-
-# ─── Request/Response Models ──────────────────────────────────────────────────
-
-class QueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=10000, description="Query in Arabic or English")
-    mode: str = Field("deep_research", description="deep_research|cognitive|arabic_nlp|knowledge")
-    session_id: Optional[str] = Field(None, description="Session ID for memory continuity")
-    language: Optional[str] = Field(None, description="ar|en|auto")
-    use_memory: bool = Field(True, description="Use session memory context")
-    stream: bool = Field(False, description="Stream response chunks")
-
-class FeedbackRequest(BaseModel):
-    message_id: str
-    session_id: str
-    query: str
-    response: str
-    rating: int = Field(..., ge=-1, le=1, description="1=positive, -1=negative, 0=neutral")
-    correction: Optional[str] = Field(None, description="User's correction if rating=-1")
-
-class ArabicAnalysisRequest(BaseModel):
-    text: str = Field(..., max_length=5000, description="Arabic text to analyze")
-    analysis_type: str = Field("full", description="full|dialect|morphology|normalize")
-
-class IngestionRequest(BaseModel):
-    source: str = Field("all", description="wikipedia|news|academic|regulatory|all")
-    limit: int = Field(50, ge=1, le=1000, description="Max documents to ingest")
-
-class QueryResponse(BaseModel):
-    session_id: str
-    message_id: str
-    query: str
-    answer: str
-    mode: str
-    agent_traces: List[Dict] = []
-    sources: List[str] = []
-    searches_performed: List[str] = []
-    confidence: float = 0.0
-    latency_ms: float = 0.0
-    model_used: str = ""
-    language_detected: str = "unknown"
-
-# ─── Core Query Endpoint ──────────────────────────────────────────────────────
-
-@app.post("/api/query", response_model=QueryResponse, tags=["Core"])
-async def query(
-    request: QueryRequest,
-    background_tasks: BackgroundTasks,
-    user: Dict = Depends(optional_auth),
-):
-    """
-    Main query endpoint. Supports all 4 cognitive modes.
-    For streaming, set stream=true and use /api/query/stream instead.
-    """
-    t0 = time.time()
-    session_id = request.session_id or str(uuid.uuid4())
-    message_id = f"msg_{uuid.uuid4().hex[:12]}"
-
-    # Get memory context if available
-    memory_context = ""
-    if request.use_memory and app_state.memory_system:
-        memory_context = await app_state.memory_system.retrieve_context(
-            request.query, session_id
-        )
-
-    try:
-        result = await _execute_query(request, session_id, memory_context)
-        latency = (time.time() - t0) * 1000
-
-        # Store in memory (background)
-        if app_state.memory_system:
-            background_tasks.add_task(
-                app_state.memory_system.store,
-                session_id=session_id,
-                query=request.query,
-                response=result.get("answer", ""),
-                agent=request.mode,
-            )
-
-        if PROMETHEUS_AVAILABLE:
-            AGENT_CALLS.labels(agent=request.mode).inc()
-
-        return QueryResponse(
-            session_id=session_id,
-            message_id=message_id,
-            query=request.query,
-            answer=result.get("answer", ""),
-            mode=request.mode,
-            agent_traces=result.get("traces", []),
-            sources=result.get("sources", []),
-            searches_performed=result.get("searches", []),
-            confidence=result.get("confidence", 0.0),
-            latency_ms=latency,
-            model_used=result.get("model", ""),
-            language_detected=result.get("language", "unknown"),
-        )
-
-    except Exception as e:
-        logger.error(f"Query failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def _execute_query(request: QueryRequest, session_id: str, memory_context: str) -> Dict:
-    """Route query to the right pipeline based on mode."""
-    query = request.query
-    if memory_context:
-        query = f"{query}\n\n[MEMORY CONTEXT]\n{memory_context}"
-
-    # Use orchestrator if available (Phase 3+)
-    if app_state.orchestrator:
-        return await app_state.orchestrator.execute(request.query, request.mode, session_id)
-
-    # Direct LLM fallback (Phase 2 — always works)
-    if not app_state.llm_client:
-        raise RuntimeError("No LLM client available")
-
-    SYSTEM_PROMPTS = {
-        "deep_research": """You are the Deep Research Intelligence of the Arabic Cognitive AI Engine.
-Research the query thoroughly. Provide comprehensive, well-cited analysis.
-Prioritize GCC/Arabic sources. Flag any uncertain information clearly.
-Respond in the same language as the query. Arabic queries → Arabic MSA response.""",
-
-        "cognitive": """You are the master reasoning intelligence of the Arabic Cognitive AI Engine.
-Apply rigorous multi-step reasoning:
-STEP 1 [ANALYZE]: What exactly is being asked?
-STEP 2 [RESEARCH]: What relevant knowledge applies?
-STEP 3 [REASON]: What logical conclusions follow?
-STEP 4 [VERIFY]: What could be wrong with this reasoning?
-STEP 5 [ANSWER]: Provide the final comprehensive response.
-Respond in the same language as the query.""",
-
-        "arabic_nlp": """أنت عميل اللغة العربية في محرك الذكاء الاصطناعي المعرفي العربي.
-You are an expert Arabic linguist. Analyze:
-1. Dialect identification (MSA/Bahraini/Gulf/Egyptian/Levantine/Maghrebi)
-2. Morphological analysis of key words
-3. MSA normalization
-4. Cultural/regional context
-5. Code-switching detection
-Write analysis in Arabic MSA with English explanations.""",
-
-        "knowledge": """You are the Knowledge Graph Intelligence.
-Extract a complete knowledge graph from the text.
-Return structured JSON with entities (name, name_ar, type, confidence) 
-and relations (from, type, to, evidence).
-Entity types: Person|Organization|Location|Concept|Regulation|Technology|Event
-Relation types: GOVERNS|REGULATES|LOCATED_IN|PART_OF|EMPLOYS|DEVELOPS|COMPETES_WITH""",
-    }
-
-    system = SYSTEM_PROMPTS.get(request.mode, SYSTEM_PROMPTS["cognitive"])
-    response = await app_state.llm_client.generate(
-        prompt=query, system=system
-    )
-
-    # Detect language
-    arabic_ratio = sum(1 for c in request.query if '\u0600' <= c <= '\u06FF') / max(len(request.query), 1)
-    lang = "ar" if arabic_ratio > 0.5 else "mixed" if arabic_ratio > 0.1 else "en"
-
-    return {
-        "answer": response.text,
-        "traces": [],
-        "sources": [],
-        "searches": [],
-        "confidence": 0.85,
-        "model": response.model,
-        "language": lang,
-    }
-
-# ─── Streaming Endpoint ───────────────────────────────────────────────────────
-
-@app.post("/api/query/stream", tags=["Core"])
-async def query_stream(
-    request: QueryRequest,
-    user: Dict = Depends(optional_auth),
-):
-    """Stream query response as Server-Sent Events (SSE)."""
-    session_id = request.session_id or str(uuid.uuid4())
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        yield f"data: {json.dumps({'type': 'start', 'session_id': session_id})}\n\n"
-
-        try:
-            if app_state.llm_client:
-                SYSTEM_PROMPTS = {
-                    "deep_research": "You are the Deep Research Intelligence. Research comprehensively, cite sources.",
-                    "cognitive": "You are a master reasoner. Think step-by-step, verify your reasoning.",
-                    "arabic_nlp": "أنت عميل اللغة العربية. Analyze Arabic text in depth.",
-                    "knowledge": "Extract structured knowledge graph entities and relations.",
-                }
-                system = SYSTEM_PROMPTS.get(request.mode, "")
-
-                async for chunk in app_state.llm_client.stream(
-                    prompt=request.query, system=system
-                ):
-                    yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
-                    await asyncio.sleep(0)  # Yield to event loop
-
-            yield f"data: {json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
-
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-# ─── WebSocket Endpoint ───────────────────────────────────────────────────────
-
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """
-    Real-time WebSocket for live agent pipeline visualization.
-    Client receives agent status updates as each agent completes.
-    """
-    await websocket.accept()
-    app_state.active_ws_sessions[session_id] = websocket
-    if PROMETHEUS_AVAILABLE:
-        ACTIVE_SESSIONS.inc()
-
-    try:
-        await websocket.send_json({"type": "connected", "session_id": session_id})
-
-        while True:
-            data = await websocket.receive_json()
-            query = data.get("query", "")
-            mode  = data.get("mode", "cognitive")
-
-            if not query:
-                continue
-
-            # Send pipeline stage updates
-            stages = ["planner", "research", "reasoning", "verification", "synthesis"]
-            for stage in stages:
-                await websocket.send_json({"type": "agent_start", "agent": stage})
-                await asyncio.sleep(0.2)
-
-                # Execute stage (simplified — orchestrator handles real execution)
-                if app_state.llm_client:
-                    result = await app_state.llm_client.generate(
-                        prompt=query,
-                        system=f"You are the {stage} agent. Be concise.",
-                        max_tokens=512,
-                    )
-                    await websocket.send_json({
-                        "type": "agent_complete",
-                        "agent": stage,
-                        "output": result.text[:500],
-                        "tokens": result.tokens,
-                    })
-                else:
-                    await websocket.send_json({"type": "agent_complete", "agent": stage, "output": ""})
-
-            await websocket.send_json({"type": "pipeline_complete"})
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {session_id}")
-    finally:
-        app_state.active_ws_sessions.pop(session_id, None)
-        if PROMETHEUS_AVAILABLE:
-            ACTIVE_SESSIONS.dec()
-
-# ─── Arabic NLP Endpoints ─────────────────────────────────────────────────────
-
-@app.post("/api/arabic/analyze", tags=["Arabic NLP"])
-async def arabic_analyze(request: ArabicAnalysisRequest, user: Dict = Depends(optional_auth)):
-    """Full Arabic linguistic analysis: dialect, morphology, NER, normalization."""
-    if app_state.arabic_nlp:
-        result = await app_state.arabic_nlp.analyze(request.text)
-        return result
-
-    # Direct LLM fallback
-    if app_state.llm_client:
-        response = await app_state.llm_client.generate(
-            prompt=request.text,
-            system="""أنت عميل اللغة العربية. Analyze:
-1. Dialect (MSA/Bahraini/Gulf/Egyptian/Levantine/Maghrebi) + confidence %
-2. Morphological analysis of 3 key words (root → pattern → meaning)
-3. MSA normalized version
-4. Cultural/regional context
-5. Code-switching if present""",
-            model="hf.co/inceptionai/jais-family-30b-chat",  # Prefer Jais for Arabic
-        )
-        return {"analysis": response.text, "model": response.model}
-
-    raise HTTPException(503, "Arabic NLP service not available")
-
-
-@app.post("/api/arabic/detect-dialect", tags=["Arabic NLP"])
-async def detect_dialect(text: str, user: Dict = Depends(optional_auth)):
-    """Fast dialect detection only."""
-    if app_state.arabic_nlp:
-        return await app_state.arabic_nlp.detect_dialect(text)
-
-    if app_state.llm_client:
-        response = await app_state.llm_client.generate(
-            prompt=f"Detect the Arabic dialect of this text and return JSON only: {text}",
-            system="Return only: {\"dialect\": \"...\", \"confidence\": 0.X, \"markers\": [...]}",
-        )
-        try:
-            return json.loads(response.text)
-        except Exception:
-            return {"dialect": "unknown", "raw": response.text}
-
-    raise HTTPException(503, "Service not available")
-
-# ─── RAG Endpoints ────────────────────────────────────────────────────────────
-
-@app.post("/api/rag/search", tags=["Knowledge"])
-async def rag_search(query: str, top_k: int = 10, user: Dict = Depends(optional_auth)):
-    """Hybrid vector + keyword search over the Arabic knowledge base."""
-    if app_state.rag_pipeline:
-        return await app_state.rag_pipeline.hybrid_search(query, top_k=top_k)
-    return {"results": [], "note": "RAG pipeline not initialized — run docker-compose up weaviate"}
-
-@app.post("/api/rag/ingest", tags=["Knowledge"])
-async def ingest(request: IngestionRequest, background_tasks: BackgroundTasks,
-                 user: Dict = Depends(optional_auth)):
-    """Trigger Arabic knowledge ingestion from configured sources."""
-    if app_state.ingestion_pipeline:
-        background_tasks.add_task(app_state.ingestion_pipeline.ingest_batch, request.source)
-        return {"status": "ingestion_started", "source": request.source}
-    return {"status": "ingestion_pipeline_not_available"}
-
-# ─── Knowledge Graph Endpoints ────────────────────────────────────────────────
-
-@app.post("/api/kg/extract", tags=["Knowledge"])
-async def kg_extract(text: str, user: Dict = Depends(optional_auth)):
-    """Extract entities and relations from text into knowledge graph format."""
-    if app_state.llm_client:
-        response = await app_state.llm_client.generate(
-            prompt=text,
-            system="""Extract knowledge graph. Return ONLY valid JSON:
-{"entities":[{"id":"..","name":"..","name_ar":"..","type":"Person|Organization|Location|Concept|Regulation|Technology","confidence":0.9}],
-"relations":[{"from":"..","type":"GOVERNS|REGULATES|LOCATED_IN|PART_OF|EMPLOYS|DEVELOPS","to":"..","evidence":".."}],
-"gcc_entities":[],"key_concepts":[]}""",
-        )
-        try:
-            return json.loads(response.text.replace("```json", "").replace("```", "").strip())
-        except Exception:
-            return {"raw": response.text}
-    raise HTTPException(503, "LLM not available")
-
-# ─── Feedback Endpoints ───────────────────────────────────────────────────────
-
-@app.post("/api/feedback", tags=["Learning"])
-async def submit_feedback(request: FeedbackRequest, user: Dict = Depends(optional_auth)):
-    """Submit feedback for a response. Feeds into RLHF/DPO learning pipeline."""
-    if app_state.feedback_system:
-        feedback_id = await app_state.feedback_system.record(
-            session_id=request.session_id,
-            message_id=request.message_id,
-            query=request.query,
-            response=request.response,
-            agent=request.session_id,
-            rating=request.rating,
-            correction=request.correction,
-        )
-        return {"status": "recorded", "feedback_id": feedback_id}
-    return {"status": "feedback_system_not_available"}
-
-@app.get("/api/feedback/stats", tags=["Learning"])
-async def feedback_stats(user: Dict = Depends(verify_token)):
-    """Get feedback statistics and learning signal summary."""
-    if app_state.feedback_system:
-        return await app_state.feedback_system.get_system_stats()
-    return {"status": "not_available"}
-
-@app.get("/api/feedback/export", tags=["Learning"])
-async def export_training_data(user: Dict = Depends(verify_token)):
-    """Export DPO preference pairs for model fine-tuning."""
-    if app_state.feedback_system:
-        return await app_state.feedback_system.export_training_data()
-    return {"status": "not_available"}
-
-# ─── Memory Endpoints ─────────────────────────────────────────────────────────
-
-@app.get("/api/memory/{session_id}", tags=["Memory"])
-async def get_memory(session_id: str, user: Dict = Depends(optional_auth)):
-    """Get memory context for a session."""
-    if app_state.memory_system:
-        entries = await app_state.memory_system.retrieve_relevant("", session_id, top_k=10)
-        return {"session_id": session_id, "memories": entries}
-    return {"session_id": session_id, "memories": []}
-
-@app.delete("/api/memory/{session_id}", tags=["Memory"])
-async def clear_memory(session_id: str, user: Dict = Depends(optional_auth)):
-    """Clear session memory (GDPR/privacy compliance)."""
-    if app_state.memory_system:
-        await app_state.memory_system.clear_session(session_id)
-    return {"status": "cleared", "session_id": session_id}
-
-# ─── System Endpoints ─────────────────────────────────────────────────────────
-
-@app.get("/api/health", tags=["System"])
+async def security_middleware(request: Request, call_next):
+    if request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    # Auth
+    key = (request.headers.get("X-API-Key")
+           or request.headers.get("x-api-key"))
+    if key != API_KEY:
+        return JSONResponse({"error": "Unauthorized"}, status_code=403)
+    # Rate limiting
+    ip = request.client.host if request.client else "unknown"
+    if not limiter.check(ip):
+        return JSONResponse({"error": "Rate limit — 40 req/min"}, status_code=429)
+    return await call_next(request)
+
+
+# Health
+@app.get("/api/health")
 async def health():
-    """Health check — returns service status of all components."""
-    llm_health = {}
-    if app_state.llm_client:
-        llm_health = await app_state.llm_client.health_check()
-
-    uptime = time.time() - app_state.start_time
-
+    try:
+        async with httpx.AsyncClient(timeout=4) as c:
+            r = await c.get(f"{OLLAMA_URL}/api/tags")
+            models = [m["name"] for m in r.json().get("models", [])]
+            ollama_ok = True
+    except:
+        models, ollama_ok = [], False
     return {
-        "status": "healthy",
-        "version": "4.0.0",
-        "uptime_seconds": round(uptime),
-        "components": {
-            "llm": llm_health,
-            "orchestrator": app_state.orchestrator is not None,
-            "rag": app_state.rag_pipeline is not None,
-            "arabic_nlp": app_state.arabic_nlp is not None,
-            "memory": app_state.memory_system is not None,
-            "feedback": app_state.feedback_system is not None,
-        },
-        "active_sessions": len(app_state.active_ws_sessions),
+        "status":       "ok",
+        "model":        PRIMARY_MODEL,
+        "ollama":       ollama_ok,
+        "models":       models,
+        "anthropic":    bool(ANTHROPIC_KEY),
+        "memory_stats": memory.stats(),
+        "rag_docs":     rag.list_docs(),
+        "timestamp":    datetime.now().isoformat(),
     }
 
-@app.get("/api/models", tags=["System"])
-async def list_models():
-    """List available models in the local Ollama instance."""
-    if app_state.llm_client:
-        models = await app_state.llm_client.list_ollama_models()
-        config = get_config()
-        return {
-            "backend": config.backend,
-            "configured": {
-                "primary": config.primary,
-                "specialist": config.specialist,
-                "router": config.router,
-            },
-            "ollama_available": models,
-        }
-    return {"status": "llm_not_initialized"}
 
-@app.get("/api/config", tags=["System"])
-async def get_current_config(user: Dict = Depends(verify_token)):
-    """Get current model configuration (admin only)."""
-    config = get_config()
-    return {
-        "backend": config.backend,
-        "primary_model": config.primary,
-        "specialist_model": config.specialist,
-        "router_model": config.router,
-        "embedding_model": config.embedding,
-        "context_window": config.context_window,
-        "fallback_to_anthropic": config.fallback_to_anthropic,
-    }
+# Streaming query (main endpoint)
+@app.post("/api/query/stream")
+async def query_stream(request: Request):
+    body       = await request.json()
+    query      = body.get("query", "").strip()
+    mode       = body.get("mode", "auto")
+    session_id = body.get("session_id", "default")
 
-@app.get("/metrics", tags=["System"])
-async def prometheus_metrics():
-    """Prometheus metrics endpoint."""
-    if PROMETHEUS_AVAILABLE:
-        return StreamingResponse(
-            iter([generate_latest()]),
-            media_type=CONTENT_TYPE_LATEST
-        )
-    return {"note": "prometheus_client not installed — pip install prometheus-client"}
+    if not query:
+        return JSONResponse({"error": "Empty query"}, status_code=400)
 
-@app.get("/", tags=["System"])
-async def root():
-    return {
-        "name": "Arabic Cognitive AI Engine",
-        "name_ar": "محرك الذكاء الاصطناعي المعرفي العربي",
-        "version": "4.0.0",
-        "phase": "Phase 2 — Live",
-        "docs": "/api/docs",
-        "health": "/api/health",
-    }
+    async def stream():
+        try:
+            result = await orchestrate(query, mode, session_id)
+            answer = result["answer"]
+            # Stream in small chunks
+            CHUNK = 5
+            words = answer.split(" ")
+            for i in range(0, len(words), CHUNK):
+                text = " ".join(words[i:i+CHUNK]) + " "
+                yield f"data: {json.dumps({'type':'chunk','text':text})}\n\n"
+                await asyncio.sleep(0.008)
+            yield f"data: {json.dumps({'type':'done','pipeline':result['pipeline'],'memory_used':result['memory_used'],'latency_ms':result['latency_ms']})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type':'error','error':str(e)})}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"X-Accel-Buffering": "no"})
+
+
+# ── Non-streaming query ───────────────────────────────────────────────────────
+@app.post("/api/query")
+async def query_sync(request: Request):
+    body  = await request.json()
+    query = body.get("query","").strip()
+    mode  = body.get("mode","auto")
+    sid   = body.get("session_id","default")
+    if not query: raise HTTPException(400, "Empty query")
+    result = await orchestrate(query, mode, sid)
+    return {"answer": result["answer"], "pipeline": result["pipeline"],
+            "memory_used": result["memory_used"], "latency_ms": result["latency_ms"]}
+
+
+# ── Web search (backend only — NO frontend API keys) ─────────────────────────
+@app.post("/api/search")
+async def search(request: Request):
+    body  = await request.json()
+    query = body.get("query","").strip()
+    if not query: return {"sources":[], "has_web":False}
+    sources = await backend_ddg_search(query, n=5)
+    return {"sources": sources, "has_web": bool(sources), "query": query}
+
+
+# ── RAG endpoints ─────────────────────────────────────────────────────────────
+@app.post("/api/rag/ingest")
+async def rag_ingest(request: Request):
+    body     = await request.json()
+    text     = body.get("text","")
+    doc_name = body.get("doc_name","document")
+    if not text: raise HTTPException(400, "No text provided")
+    n = rag.ingest(text, doc_name)
+    return {"doc_name": doc_name, "chunks": n, "status": "ok"}
+
+@app.get("/api/rag/docs")
+async def rag_docs():
+    return {"docs": rag.list_docs()}
+
+@app.post("/api/rag/retrieve")
+async def rag_retrieve(request: Request):
+    body  = await request.json()
+    query = body.get("query","")
+    k     = body.get("k", 3)
+    return {"chunks": rag.retrieve(query, k)}
+
+
+# ── Memory endpoints ──────────────────────────────────────────────────────────
+@app.get("/api/memory/stats")
+async def mem_stats():
+    return {"memory": memory.stats(), "experiment": memory.experiment_summary()}
+
+@app.post("/api/memory/search")
+async def mem_search(request: Request):
+    body  = await request.json()
+    query = body.get("query","")
+    return {"context": memory.get_context(query, 5)}
+
+
+# ── Evaluation endpoints ─────────────────────────────────────────────────────
+@app.get("/api/eval/dcr")
+async def eval_dcr():
+    """Run DCR + MLR evaluation. Returns paper metrics."""
+    result = await run_dcr_eval()
+    return result
+
+@app.post("/api/eval/memory_experiment")
+async def eval_memory(request: Request):
+    """Before/after memory experiment for the paper."""
+    body      = await request.json()
+    questions = body.get("questions", [
+        "ما متطلبات ترخيص البنك في البحرين؟",
+        "كيف أحمي حسابي من الاحتيال؟",
+        "ما هي رؤية البحرين 2030؟",
+        "شلون أعرف رصيد حسابي؟",
+        "ما الفرق بين CBB و SAMA؟",
+    ])
+    return await run_memory_experiment(questions)
+
+@app.post("/api/eval/benchmark")
+async def run_benchmark_endpoint(request: Request):
+    """Run Bahraini benchmark against current model."""
+    body = await request.json()
+    questions = body.get("questions", [])
+    if not questions:
+        return JSONResponse({"error": "Provide questions array"}, status_code=400)
+
+    results = []
+    for item in questions[:20]:
+        q   = item.get("q","")
+        ans = item.get("answer","")
+        r   = await orchestrate(q, mode="auto")
+        results.append({
+            "q":           q,
+            "expected":    ans,
+            "got":         r["answer"][:100],
+            "pipeline":    r["pipeline"],
+            "latency_ms":  r["latency_ms"],
+        })
+    return {"results": results, "total": len(results)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -25,7 +25,6 @@ TO USE ANTHROPIC AS FALLBACK ONLY:
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 
 # ─── INFERENCE BACKEND ────────────────────────────────────────────────────────
