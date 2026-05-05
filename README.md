@@ -3,7 +3,7 @@
 # ACAI — Arabic Cognitive AI Engine
 ### محرك الذكاء الاصطناعي المعرفي العربي
 
-**Private · On-Premise · Arabic-First · Research-Grade**
+**Offline, Bahraini Arabic AI Platform**
 
 *University of Bahrain · College of Information Technology · Benefit AI Lab · 2026*
 
@@ -17,56 +17,50 @@
 
 ## Overview
 
-ACAI is a production-grade, fully private Arabic AI platform built for Bahrain and the GCC. It enables users to interact with a cognitive multi-agent system using natural language in Arabic or English — with **zero data leaving the machine**.
+ACAI is a fully private Arabic AI platform built for Bahrain and the GCC. It enables users to interact with a cognitive multi-agent system using natural language in Arabic or English, completely offline in your browser.
 
-No OpenAI. No cloud APIs. No data sovereignty risk.
-
-The system is the first to specifically target **Bahraini Arabic dialect** — providing dialect identification, morphological analysis, MSA normalisation, and GCC regulatory knowledge in a single unified platform.
+The system is the first to specifically target the Bahraini Arabic dialect, providing dialect identification, morphological analysis, MSA normalisation, and GCC regulatory knowledge in a single unified platform.
 
 ## Key Features
 
-### 🧠 Multi-Agent Cognitive Pipeline
-Six specialist agents, each with a distinct role. The orchestrator routes every query automatically — no manual agent selection.
+### Multiple agents for different cognitive tasks
+The system contains six agents (chats) each specializing in a distinct role. They can be chosen manually or through the orchestrator, which routes every query automatically to the suitbale agents.
 
 | Agent | Arabic | Role |
 |---|---|---|
-| Researcher | باحث | Web search with source citations — zero hallucination policy |
+| Researcher | باحث | Web search with source citations |
 | Reasoner | حكيم | 5-step chain-of-thought for complex analysis |
 | GCC Advisor | مشير | CBB, SAMA, UAECB regulations and Vision 2030 |
 | Arabic Expert | لغوي | Dialect identification, morphology, MSA normalisation |
-| Fact Checker | مراقب | Claim verification — always runs last |
+| Fact Checker | مراقب | Claim verification |
 | Knowledge Builder | بانِ | Entity and relation extraction |
 
-### 🗣️ Bahraini Arabic Specialisation
+### Bahraini Arabic specialisation
 - Automatic dialect detection (Bahraini, Gulf, Saudi, Egyptian, Levantine, MSA)
-- Morphological analysis — root → pattern → weight → meaning
+- Morphological analysis: root → pattern → weight → meaning
 - Code-switching detection (Arabic + English mixed input)
-- 150-question Bahraini dialect benchmark (first of its kind)
-- Fine-tuning pipeline for dialect adaptation (QLoRA on Hayrat A100)
+- 150-question Bahraini dialect benchmark
+- QLORA fine-tuning pipeline for dialect adaptation
 
-### 📚 RAG — Document Intelligence
+### RAG for document-based queries
 - Ingest CBB circulars, internal policies, regulatory documents
 - AI answers grounded in your actual documents with citations
-- SQLite FTS5 retrieval — no external vector database required
-- Source cited in every regulatory response
+- Local SQLite FTS5 retrieval
+- Source citation in every regulatory response
 
-### 🧠 Persistent Cross-Session Memory
-- SQLite FTS5 full-text search over all past conversations
+### Persistent cross-session memory
+- Local SQLite FTS5 full-text search over all past conversations
 - Relevant context injected before every query automatically
-- Survives server restarts — no Redis required
-- Auto-generates reusable skill files from high-quality responses
+- Auto-generation of reusable skill files from high-quality responses
 
-### 🔒 Security
-- All API keys in server `.env` only — zero secrets in browser
+### Novel evaluation metrics
+- **DCR (Dialect Control Rate)**: measures dialect generation fidelity
+- **MLR (MSA Leak Rate)**: measures formal Arabic contamination in dialect output
+
+### Security
 - JWT-style API key middleware on every endpoint
 - Rate limiting (40 requests/min per IP)
 - CORS handled at middleware level
-- `.env` protected by `.gitignore`
-
-### 📊 Novel Evaluation Metrics
-- **DCR (Dialect Control Rate)** — measures dialect generation fidelity
-- **MLR (MSA Leak Rate)** — measures formal Arabic contamination in dialect output
-- Neither metric exists in any prior Arabic NLP publication
 
 ## Benchmark Results
 
@@ -86,9 +80,9 @@ Six specialist agents, each with a distinct role. The orchestrator routes every 
 
 | Model | ABBL | Deployment |
 |---|---|---|
-| GPT-4o | ~72% | ☁️ Cloud — sovereignty risk |
-| Jais-30B | ~65% | ☁️ Cloud — sovereignty risk |
-| **Qwen2.5-14B (ACAI)** | **87.5%** |  Local — data sovereign |
+| GPT-4o | ~72% | Cloud |
+| Jais-30B | ~65% | Cloud |
+| **Qwen2.5-14B (ACAI)** | **87.5%** |  Local |
 
 ## Architecture
 
@@ -375,9 +369,7 @@ See `slurm_finetune.sh` for the complete training job.
 Before any institutional deployment:
 
 - Change `API_KEY` in `.env` to a strong random value
-- Never commit `.env` (protected by `.gitignore`)
-- All AI API keys live server-side only — frontend has zero secrets
-- Rate limiting prevents abuse (40 req/min per IP)
+- Do not commit `.env` (protected by `.gitignore`)
 
 ## Acknowledgements
 
