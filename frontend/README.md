@@ -245,7 +245,7 @@ All endpoints require `X-API-Key` header. Health check is public.
 
 ### Chat (Streaming)
 ```http
-POST /api/query/stream
+POST query/stream
 X-API-Key: your-key
 Content-Type: application/json
 
@@ -260,7 +260,7 @@ Response: Server-Sent Events stream
 
 ### Chat (Sync)
 ```http
-POST /api/query
+POST query
 X-API-Key: your-key
 
 { "query": "شلون أفتح حساب؟", "mode": "auto" }
@@ -268,7 +268,7 @@ X-API-Key: your-key
 
 ### Document Ingestion
 ```http
-POST /api/rag/ingest
+POST rag/ingest
 X-API-Key: your-key
 
 { "text": "...", "doc_name": "CBB_Circular_2025" }
@@ -276,23 +276,23 @@ X-API-Key: your-key
 
 ### Health Check
 ```http
-GET /api/health
+GET health
 # No auth required
 ```
 
 ### Full Endpoint List
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/health` | GET | System status, models, memory stats |
-| `/api/query/stream` | POST | Streaming orchestrated response |
-| `/api/query` | POST | Non-streaming response |
-| `/api/search` | POST | Web search (backend-only) |
-| `/api/rag/ingest` | POST | Ingest document into RAG |
-| `/api/rag/docs` | GET | List ingested documents |
-| `/api/rag/retrieve` | POST | Retrieve relevant chunks |
-| `/api/memory/stats` | GET | Memory database statistics |
-| `/api/memory/search` | POST | Search past conversations |
-| `/api/eval/dcr` | GET | Run DCR + MLR evaluation |
+| `health` | GET | System status, models, memory stats |
+| `query/stream` | POST | Streaming orchestrated response |
+| `query` | POST | Non-streaming response |
+| `search` | POST | Web search (backend-only) |
+| `rag/ingest` | POST | Ingest document into RAG |
+| `rag/docs` | GET | List ingested documents |
+| `rag/retrieve` | POST | Retrieve relevant chunks |
+| `memory/stats` | GET | Memory database statistics |
+| `memory/search` | POST | Search past conversations |
+| `eval/dcr` | GET | Run DCR + MLR evaluation |
 
 ---
 

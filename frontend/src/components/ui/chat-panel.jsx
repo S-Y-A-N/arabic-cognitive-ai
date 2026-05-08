@@ -39,7 +39,7 @@ export const ChatPanel = ({ ag, theme }) => {
       })),
       err    => upd(m => ({
         ...m,
-        content: `خطأ في الاتصال:\n${err}\n\nتأكد من تشغيل:\ncd backend && uvicorn main_v5:app --port 8000`,
+        content: `خطأ في الاتصال:\n${err}\n\nتأكد من تشغيل الخادم.`,
         streaming:false, error:true
       })),
     );

@@ -14,7 +14,7 @@ export default function App() {
 
   useEffect(() => {
     const check = () =>
-      fetch(`${BACKEND}/api/health`)
+      fetch(`${BACKEND}/health`)
         .then(r => r.json()).then(() => setHealth(true))
         .catch(() => setHealth(false));
     check();

@@ -12,7 +12,7 @@ export async function callBackend(query, mode, agentId, onChunk, onSearch, onDon
     // Announce which agents will run (via health check intent)
     onSearch("⚙️ " + mode.replace("single:", ""));
 
-    const r = await fetch(`${BACKEND}/api/query/stream`, {
+    const r = await fetch(`${BACKEND}/query/stream`, {
       method: "POST",
       headers,
       body: JSON.stringify({ query, mode, session_id: agentId }),
