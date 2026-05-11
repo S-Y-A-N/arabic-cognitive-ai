@@ -48,7 +48,7 @@ def ollama_call(prompt: str | Dict[str, Dict[str, str]], system: str = "", model
         for chunk in stream:
             print(chunk)
             yield chunk['message']['content']
-        # if chunk['done']: return # TODO CHECK
+        if chunk['done']: return # TODO CHECK
     except Exception as e:
         log.error(f"Ollama error: {e}")
         

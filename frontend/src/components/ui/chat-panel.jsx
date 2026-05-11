@@ -23,7 +23,7 @@ export const ChatPanel = ({ ag, theme }) => {
     const uid = Date.now(), aid = uid + 1;
     setMsgs(p => [...p,
       { id:uid, role:"user", content:q },
-      { id:aid, role:"assistant", content:"", streaming:true, searches:[] }
+      { id:aid, role:"assistant", content:"", streaming: false, searches:[] }
     ]);
     const t0 = Date.now();
     const upd = fn => setMsgs(p => p.map(m => m.id === aid ? fn(m) : m));
@@ -33,14 +33,14 @@ export const ChatPanel = ({ ag, theme }) => {
       chunk  => upd(m => ({ ...m, content: m.content + chunk })),
       q2     => upd(m => ({ ...m, searches: [...m.searches, { q:q2, done:false }] })),
       () => upd(m => ({
-        ...m, streaming: true,
+        ...m, streaming: false,
         latency: Date.now() - t0,
-        searches: m.searches.map(s => ({ ...s, done:true }))
+        searches: m.searches.map(s => ({ ...s, done: true }))
       })),
       err    => upd(m => ({
         ...m,
         content: `خطأ في الاتصال:\n${err}\n\nتأكد من تشغيل الخادم.`,
-        streaming: true, error:true
+        streaming: false, error: true
       })),
     );
     setBusy(false);

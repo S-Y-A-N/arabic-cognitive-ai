@@ -1,20 +1,17 @@
 import { memo } from "react";
+import Markdown from 'react-markdown'
+
 import { Chip } from "./chip";
 import { isAr } from "../../utils/arabic";
 
 export const Bubble = memo(({ msg, ag, t }) => {
-  const ar = isAr(msg.content);
   if (msg.role === "user") return (
     <div style={{ display:"flex", justifyContent:"flex-end",
       marginBottom:20, animation:"acai-up .25s ease" }}>
       <div style={{ maxWidth:"74%", background:t.userBg,
         border:"1px solid #2563eb22", borderRadius:"18px 18px 4px 18px",
         padding:"13px 18px" }}>
-        <p style={{ margin:0, color:"#e2e8f0",
-          fontSize:ar?17:14.5, lineHeight:1.85,
-          direction:ar?"rtl":"ltr", textAlign:ar?"right":"left",
-          fontFamily:ar?"'Scheherazade New',serif":"inherit",
-          whiteSpace:"pre-wrap" }}>{msg.content}</p>
+            <Markdown>{msg.content}</Markdown>
       </div>
     </div>
   );
@@ -63,12 +60,8 @@ export const Bubble = memo(({ msg, ag, t }) => {
                 color:msg.error?"#f87171":t.text,
                 fontSize:ar2?17:14.5, lineHeight:1.95,
                 whiteSpace:"pre-wrap", wordBreak:"break-word",
-                direction:ar2?"rtl":"ltr", textAlign:ar2?"right":"left",
-                fontFamily:ar2?"'Scheherazade New',serif"
-                              :"'JetBrains Mono','Fira Code',monospace" }}>
-                {msg.content}
-                {msg.streaming &&
-                  <span style={{ opacity:.5, animation:"acai-blink 1s infinite" }}>▌</span>}
+                direction:ar2?"rtl":"ltr", textAlign:ar2?"right":"left"}}>
+                <Markdown>{msg.content}</Markdown>
               </p>
             : <div style={{ display:"flex", alignItems:"center", gap:9 }}>
                 <div style={{ width:15, height:15, borderRadius:"50%",

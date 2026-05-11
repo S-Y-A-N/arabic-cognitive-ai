@@ -26,7 +26,7 @@ async def stream_query(request: Request):
     
     model = PRIMARY_MODEL
     
-    # orchestrator: returns pipeline
+    # orchestrator: returns pipeline, prmopt per agent
     orch = await orchestrate(prompt, mode, sid)
     agent_prompts = orch['prompts']
     return StreamingResponse(ollama_call(agent_prompts, model=model), media_type="text/plain")
