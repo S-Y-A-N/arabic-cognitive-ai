@@ -8,39 +8,28 @@ from fastapi.responses import StreamingResponse
 # from app.services.query import stream_query
 # from app.dependencies import get_db
 from app.services.orchestrator import orchestrate
+from app.services.agent import ollama_call
 
 router = APIRouter(prefix="/query", tags=["query"])
 
+from app.core.logger import log
+from app.core.config import PRIMARY_MODEL
+import ollama
 # streaming
-@router.post("/stream")
+@router.post("/stream", response_class=StreamingResponse)
 async def stream_query(request: Request):
     body  = await request.json()
-    query = body.get("query","").strip()
+    prompt = body.get("query","").strip()
     mode  = body.get("mode","auto")
     sid   = body.get("session_id","default")
-    if not query: raise HTTPException(400, "Empty query")
-
-
-    async def stream_query(query):
-        try:
-            response = await orchestrate(query, mode, sid)
-            answer = response["answer"]
-            # Stream in small chunks
-            CHUNK = 5
-            words = answer.split(" ")
-            for i in range(0, len(words), CHUNK):
-                text = " ".join(words[i:i+CHUNK]) + " "
-                yield f"data: {json.dumps({'type':'chunk','text':text})}\n\n"
-                await asyncio.sleep(0.008)
-            yield f"data: {json.dumps({'type':'done', 'pipeline': response['pipeline'],})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type':'error', 'error': str(e)})}\n\n"
-            
-    return StreamingResponse(
-        stream_query(query),
-        media_type="text/event-stream",
-        headers={"X-Accel-Buffering": "no"}
-    )
+    if not prompt: raise HTTPException(400, "Empty prompt")
+    
+    model = PRIMARY_MODEL
+    
+    # orchestrator: returns pipeline
+    orch = await orchestrate(prompt, mode, sid)
+    agent_prompts = orch['prompts']
+    return StreamingResponse(ollama_call(agent_prompts, model=model), media_type="text/plain")
    
 # non-streaming 
 @router.post("/")

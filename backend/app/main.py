@@ -2,18 +2,29 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import ollama
 
-from app.core.logger import log
 from app.core.config import *
+from app.core.logger import log
 from app.core.security import limiter
+from app.db.database import init_db
 
 from app.routers import query, health
 
 
 async def lifespan(app: FastAPI):
-    log.info("🚀 ACAI v5 — محرك الذكاء الاصطناعي المعرفي العربي")
-    log.info(f"Model:     {PRIMARY_MODEL}")
+    log.info("🚀 ACAI: محرك الذكاء الاصطناعي المعرفي العربي")
     log.info("✅ ACAI ready")
+    
+    # database init
+    try: init_db(); log.info("Database initizalized.")
+    except Exception as e: log.error(f"Database initialization error: {e}")
+    
+    # model preloading
+    try:
+        ollama.generate(model=PRIMARY_MODEL)
+    except Exception as e:
+        log.error(f"Ollama preloading error: {e}")
     
     yield # execute everything before `yield` at startup
 

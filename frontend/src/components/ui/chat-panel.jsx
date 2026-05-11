@@ -33,14 +33,14 @@ export const ChatPanel = ({ ag, theme }) => {
       chunk  => upd(m => ({ ...m, content: m.content + chunk })),
       q2     => upd(m => ({ ...m, searches: [...m.searches, { q:q2, done:false }] })),
       () => upd(m => ({
-        ...m, streaming:false,
+        ...m, streaming: true,
         latency: Date.now() - t0,
         searches: m.searches.map(s => ({ ...s, done:true }))
       })),
       err    => upd(m => ({
         ...m,
         content: `خطأ في الاتصال:\n${err}\n\nتأكد من تشغيل الخادم.`,
-        streaming:false, error:true
+        streaming: true, error:true
       })),
     );
     setBusy(false);

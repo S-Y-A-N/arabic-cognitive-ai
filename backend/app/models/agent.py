@@ -17,5 +17,3 @@ class Agent(Base):
   # children
   queries: Mapped["Query"] = relationship(back_populates="agent")
   responses: Mapped["Response"] = relationship(back_populates="agent")
-  
-  

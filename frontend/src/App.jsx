@@ -51,7 +51,7 @@ export default function App() {
               Arabic Cognitive AI
             </div>
             <div className="logo-btm-text" style={{ color: t.faint }}>
-              الذكاء المعرفي العربي الاصطناعي
+              الذكاء الاصطناعي المعرفي العربي
             </div>
           </div>
         </div>

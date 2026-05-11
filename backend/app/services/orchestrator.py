@@ -1,16 +1,14 @@
 from typing import List, Dict
-import time
 
 from app.core.logger import log
 from app.core.orchestrator_config import *
-from app.services.agent import execute_agent, merge_pipeline_outputs
+from app.services.agent import build_agent_prompt
+from app.core.agent_config import AGENT_LABELS
 
 
 async def orchestrate(query: str, mode: str = "auto",
                       session_id: str = "default") -> dict:
     """Full orchestration: memory → RAG → pipeline → merge → save."""
-    t0 = time.time()
-
     # 1. Memory retrieval
     # mem_ctx  = memory.get_context(query, limit=3)
     # mem_used = bool(mem_ctx)
@@ -22,25 +20,30 @@ async def orchestrate(query: str, mode: str = "auto",
     # 3. Intent + pipeline
     intent   = classify_intent(query)
     pipeline = build_pipeline(intent, mode)
+    
 
     # 4. Sequential execution (context accumulates)
-    outputs:  Dict[str, str] = {}
+    prompts:  Dict[str, str] = {}
     acc_ctx:  str = ""
     for agent_id in pipeline:
-        out = await execute_agent(
+        agent_prompt = await build_agent_prompt(
             agent_id   = agent_id,
             query      = query,
             prev_context = acc_ctx,
             # memory_ctx = mem_ctx if not acc_ctx else "",
             # rag_ctx    = rag_ctx  if not acc_ctx else "",
         )
-        outputs[agent_id] = out
-        if out and not out.startswith("[خطأ"): acc_ctx = out
+        prompts[agent_id] = agent_prompt
 
-    # 5. Merge
-    final = merge_pipeline_outputs(pipeline, outputs)
-
-    latency = int((time.time() - t0) * 1000)
+    return {
+        'pipeline': pipeline,
+        'prompts': prompts,
+        'intent': intent,
+        # "memory_used": mem_used,
+        # "rag_used":    rag_used,
+        # "agents":      {k: v[:200] + "..." if len(v) > 200 else v
+        #                 for k, v in streams.items()},
+    }
 
     # 6. Save to memory + log
     # memory.save("orchestrator", query, final, quality=3)
@@ -48,16 +51,6 @@ async def orchestrate(query: str, mode: str = "auto",
     #                       "with_memory" if mem_used else "without_memory",
     #                       pipeline, latency)
 
-    return {
-        "answer":      final,
-        "pipeline":    pipeline,
-        "intent":      intent,
-        # "memory_used": mem_used,
-        # "rag_used":    rag_used,
-        "latency_ms":  latency,
-        "agents":      {k: v[:200] + "..." if len(v) > 200 else v
-                        for k, v in outputs.items()},
-    }
     
 def classify_intent(query: str) -> dict:
     q = query.lower()
@@ -97,3 +90,15 @@ def build_pipeline(intent: dict, mode: str = "auto") -> List[str]:
     for a in p:
         if a not in seen: seen.add(a); out.append(a)
     return out
+
+def merge_pipeline_outputs(pipeline: List[str], outputs: Dict[str, str]) -> str:
+    valid = {a: o for a, o in outputs.items() if o.status_code == 200}
+    if not valid: return "لم أتمكن من توليد إجابة."
+    if len(valid) == 1: return next(iter(valid.values()))
+    parts = []
+    for a in pipeline:
+        if a != "muraqib" and a in valid:
+            parts.append(f"### {AGENT_LABELS.get(a, a)}\n{valid[a]}")
+    if "muraqib" in valid:
+        parts.append(f"\n---\n### 🔍 مراقب\n{valid['muraqib']}")
+    return "\n\n".join(parts)

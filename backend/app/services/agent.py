@@ -1,8 +1,10 @@
-import httpx
+from fastapi.responses import StreamingResponse
 from typing import List, Dict
+import json
 from app.core.logger import log
 from app.core.config import *
 from app.core.agent_config import *
+import ollama
 
 async def ddg_search(query: str, n: int = 5) -> list:
     try:
@@ -19,36 +21,45 @@ async def ddg_search(query: str, n: int = 5) -> list:
         return []
 
 
-async def ollama_call(prompt: str, system: str = "", model: str = None) -> str:
+def ollama_call(prompt: str | Dict[str, Dict[str, str]], system: str = "", model: str = None):
     model = model or PRIMARY_MODEL
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.3,
-            "num_predict": 1500
-        }
-    }
-    if system: payload["system"] = system
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            print(payload)
-            res = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-            res.raise_for_status()
-            if res.status_code == 200:
-                return res.json().get("response", "")
+        messages = []
+        # model='gemma3:1b-it-qat' created_at='2026-05-11T13:11:10.045441322Z' done=False done_reason=None total_duration=None load_duration=None prompt_eval_count=None prompt_eval_duration=None eval_count=None eval_duration=None message=Message(role='assistant', content='Hello', thinking=None, images=None, tool_name=None, tool_calls=None) logprobs=None
+        if system:
+            messages.append({'role': 'system', 'content': system})
+        if isinstance(prompt, Dict):
+            for p in prompt.values():
+                prompt = p['prompt']
+                system = p['system']
+                messages.extend([
+                    {'role': 'system', 'content': system},
+                    {'role': 'user', 'content': prompt}
+                ])
+        print(messages)
+        stream = ollama.chat(
+            model=model,
+            stream=True,
+            messages=messages,
+            options={
+                'num_predict': 1000,
+            }
+        )
+        for chunk in stream:
+            print(chunk)
+            yield chunk['message']['content']
+        # if chunk['done']: return # TODO CHECK
     except Exception as e:
         log.error(f"Ollama error: {e}")
-    return ""
+        
 
-async def execute_agent(agent_id: str, query: str,
+async def build_agent_prompt(agent_id: str, query: str,
                         prev_context: str = "",
                         memory_ctx: str = "",
-                        rag_ctx: str = "") -> str:
-    """Execute one agent. Builds prompt, calls LLM, returns text."""
+                        rag_ctx: str = ""):
+    """Builds prompt for an agent."""
+    
     system = SYSTEM_PROMPTS.get(agent_id, "أنت مساعد ذكي.")
-    model  = AGENT_MODELS.get(agent_id, PRIMARY_MODEL)
 
     # باحث uses web search
     if agent_id == "bahith":
@@ -61,7 +72,11 @@ async def execute_agent(agent_id: str, query: str,
             prompt = f"{ctx}\n\nبناءً على النتائج أعلاه، أجب على: {query}"
         else:
             prompt = query
-        return await ollama_call(prompt, system, model)
+            
+        return {
+            'system': system,
+            'prompt': prompt
+        }
 
     # Build prompt with all context layers
     parts = []
@@ -69,18 +84,10 @@ async def execute_agent(agent_id: str, query: str,
     if rag_ctx:      parts.append(f"[وثائق]\n{rag_ctx}")
     if prev_context: parts.append(f"[مخرجات سابقة]\n{prev_context}")
     parts.append(query)
-    return await ollama_call("\n\n".join(parts), system, model)
+    prompt = "\n\n".join(parts)
+    return {
+        'system': system,
+        'prompt': prompt
+    }
 
 
-
-def merge_pipeline_outputs(pipeline: List[str], outputs: Dict[str, str]) -> str:
-    valid = {a: o for a, o in outputs.items() if o and not o.startswith("[خطأ")}
-    # if not valid: return "لم أتمكن من توليد إجابة."
-    if len(valid) == 1: return next(iter(valid.values()))
-    parts = []
-    for a in pipeline:
-        if a != "muraqib" and a in valid:
-            parts.append(f"### {AGENT_LABELS.get(a, a)}\n{valid[a]}")
-    if "muraqib" in valid:
-        parts.append(f"\n---\n### 🔍 مراقب\n{valid['muraqib']}")
-    return "\n\n".join(parts)
