@@ -4,8 +4,9 @@ const headers = {
   "Content-Type": "application/json",
 };
 
+// TODO agentId is session id becuase one chat per agent for now
+// Later add feature to create many chats with session ids
 export async function callBackend(query, mode, agentId, onChunk, onSearch, onDone, onError) {
-
   try {
     // Announce which agents will run (via health check intent)
     onSearch("⚙️ " + mode.replace("single:", ""));
@@ -32,28 +33,6 @@ export async function callBackend(query, mode, agentId, onChunk, onSearch, onDon
       const chunk = decoder.decode(value, { stream: true });
       onChunk(chunk)
 
-      // seperate by new line and remove `\n`
-      // const lines = buffer.split("\n");
-      // buffer = lines.pop();
-      // show stream by new lines
-      // for (const line of lines) {
-        // console.log(line)
-        // if (!line.startsWith("data: ")) continue;
-        // try {
-        //   const d = JSON.parse(line.slice(6));
-        //   if (d.type === "chunk" && d.text) onChunk(d.text);
-        //   if (d.type === "done") {
-        //     if (d.pipeline?.length > 1) {
-        //       d.pipeline.forEach(a => onSearch(`✓ ${a}`));
-        //     }
-        //     onDone(d);
-        //     return;
-        //   }
-        //   if (d.type === "error") { onError(d.error); return; }
-        // } catch (e) {
-        //   onError(e.message)
-        // }
-      // }
     }
     onDone({});
   } catch (e) {

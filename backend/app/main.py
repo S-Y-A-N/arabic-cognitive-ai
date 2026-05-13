@@ -7,17 +7,20 @@ import ollama
 from app.core.config import *
 from app.core.logger import log
 from app.core.security import limiter
-from app.db.database import init_db
 
 from app.routers import query, health
-
-
+  
 async def lifespan(app: FastAPI):
     log.info("🚀 ACAI: محرك الذكاء الاصطناعي المعرفي العربي")
     log.info("✅ ACAI ready")
     
     # database init
-    try: init_db(); log.info("Database initizalized.")
+    try:
+        from app.db.database import engine
+        from app.db.base import Base
+        import app.db.models
+        Base.metadata.create_all(bind=engine)
+        log.info("Database initizalized.")
     except Exception as e: log.error(f"Database initialization error: {e}")
     
     # model preloading

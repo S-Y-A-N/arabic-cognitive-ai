@@ -1,3 +1,5 @@
+# TODO Will be changed
+
 class MinimalRAG:
     """
     Zero-dependency RAG using SQLite FTS5.

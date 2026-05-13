@@ -1,3 +1,6 @@
+# TODO Will likely be delted and replaced with database integration
+
+
 class MemoryStore:
     def __init__(self, db: Path = MEMORY_DB):
         self.db = str(db)

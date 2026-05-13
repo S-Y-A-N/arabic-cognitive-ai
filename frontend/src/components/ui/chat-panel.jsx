@@ -29,7 +29,9 @@ export const ChatPanel = ({ ag, theme }) => {
     const upd = fn => setMsgs(p => p.map(m => m.id === aid ? fn(m) : m));
 
     await callBackend(
-      q, ag.mode, ag.id,
+      q,
+      ag.mode,
+      ag.id,
       chunk  => upd(m => ({ ...m, content: m.content + chunk })),
       q2     => upd(m => ({ ...m, searches: [...m.searches, { q:q2, done:false }] })),
       () => upd(m => ({

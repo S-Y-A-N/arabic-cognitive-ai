@@ -1,5 +1,6 @@
-__pycache__
 .env
 *.egg-info
 *.db
 .vscode
+__pycache__
+**/__pycach__/

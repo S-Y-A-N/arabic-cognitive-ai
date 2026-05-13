@@ -2,9 +2,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.schemas.query import QueryCreate
 from app.services.agent import ddg_search
-from app.dependencies import get_db
 
 
 router = APIRouter(prefix="/query", tags=["query"])
