@@ -1,16 +1,30 @@
 import { useState, useEffect } from "react";
-import { AGENTS } from "./data/agents";
+import { AGENTS } from "./config/agents";
 import { ChatPanel } from "./components/ui/chat-panel";
-import { DARK, LIGHT } from "./data/theme";
-import { BACKEND } from "./data/backend";
+import { DARK, LIGHT } from "./config/theme";
+import { BACKEND } from "./config/backend";
+import { SunFill, MoonStarsFill } from "react-bootstrap-icons";
 
 export default function App() {
   const [active, setActive] = useState("auto");
-  const [theme, setTheme] = useState("dark");
   const [sidebar, setSidebar] = useState(true);
   const [health, setHealth] = useState(null);
-  const t = theme === "dark" ? DARK : LIGHT;
   const ag = AGENTS.find(a => a.id === active);
+  const [theme, setTheme] = useState(() => {
+    const savedTheme = localStorage.getItem('theme');
+    return savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  });
+  const t = theme === "dark" ? DARK : LIGHT;
+
+  useEffect(() => {
+    // Add data-theme="dark" (or light) to the <html> tag
+    localStorage.setItem('theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
 
   useEffect(() => {
     const check = () =>
@@ -23,21 +37,19 @@ export default function App() {
   }, []);
 
   return (
-    <div className="container" style={{ background: t.bg, color: t.text }}>
+    <div className="container">
+
       {/* HEADER */}
-      <header style={{ background: t.panel, borderBottom: `1px solid ${t.border}` }}>
+      <header>
 
         {/* Sidebar toggle button */}
-        <button className="sidebar-toggle" onClick={() => setSidebar(o => !o)}
-          style={{ color: t.muted }}
-          onMouseOver={e => e.currentTarget.style.color = t.text}
-          onMouseOut={e => e.currentTarget.style.color = t.muted}>
+        <button className="sidebar-toggle" onClick={() => setSidebar(o => !o)}>
           {sidebar ? "▶ أغلق" : "◀ افتح"}
         </button>
 
         <div className="logo">
           <div className="logo-image">
-            <svg fill={theme === "dark" ? "white" : "black"} height="40px" width="40px" version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 325 325" xml:space="preserve">
+            <svg height="40px" width="40px" version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 325 325" xml:space="preserve">
               <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
               <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
               <g id="SVGRepo_iconCarrier"> <g>
@@ -47,29 +59,24 @@ export default function App() {
             </svg>
           </div>
           <div className="logo-text">
-            <div className="logo-top-text" style={{ color: t.muted }}>
+            <div className="logo-top-text">
               Arabic Cognitive AI
             </div>
-            <div className="logo-btm-text" style={{ color: t.faint }}>
+            <div className="logo-btm-text">
               الذكاء الاصطناعي المعرفي العربي
             </div>
           </div>
         </div>
 
         <div className="header-right">
+
           {/* Dark/Light toggle */}
-          <button className="theme-toggle" onClick={() => setTheme(th => th === "dark" ? "light" : "dark")}
-            style={{
-              background: theme === "dark" ? "#1e3a5f" : "#e2e8f0",
-              border: `1px solid ${t.border}`
-            }}>
-            <div className="theme-icon" style={{
-              left: theme === "dark" ? 3 : 19,
-              background: theme === "dark" ? "#4575cf" : "#ce871e",
-            }}>
-              {theme === "dark" ? "🌙" : "☀️"}
-            </div>
+          <button className="theme-toggle" onClick={toggleTheme}>
+            {theme == 'dark'
+              ? <MoonStarsFill />
+              : <SunFill />}
           </button>
+
         </div>
       </header>
 

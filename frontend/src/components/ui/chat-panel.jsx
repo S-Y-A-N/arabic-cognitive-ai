@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Bubble } from "./message-bubble";
-import { DARK, LIGHT } from "../../data/theme";
+import { DARK, LIGHT } from "../../config/theme";
 import { isAr } from "../../utils/arabic";
 import { callBackend } from "../../features/chats/api/get-response";
 

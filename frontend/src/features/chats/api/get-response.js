@@ -1,4 +1,4 @@
-import { BACKEND } from "../../../data/backend";
+import { BACKEND } from "../../../config/backend";
 
 const headers = {
   "Content-Type": "application/json",
