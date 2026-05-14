@@ -1,5 +1,5 @@
 from app.core.orchestrator_config import *
-from app.services.agent import build_agent_prompt, build_ollama_messages, ollama_call
+from app.services.agent import build_agent_prompt, build_ollama_messages, ollama_blocking, ollama_streaming
 from app.core.agent_config import AGENT_LABELS, AGENT_MODELS
 from app.core.config import PRIMARY_MODEL
 
@@ -35,7 +35,7 @@ async def orchestrate(
 
             # build the messages structure for ollama, then execute agent
             messages = build_ollama_messages(system=system, prompt=prompt, message_history=message_history)
-            agent_response = ollama_call(model=model, messages=messages, stream=False)
+            agent_response = ollama_blocking(model=model, messages=messages)
 
             # save agent response as context for next agent, and save the response
             acc_context = agent_response

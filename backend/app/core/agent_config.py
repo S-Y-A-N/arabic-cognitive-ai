@@ -1,4 +1,5 @@
-from app.core.config import ARABIC_MODEL
+from app.core.config import ARABIC_MODEL, PRIMARY_MODEL
+
 AGENT_LABELS = {
     "bahith":"🔭 باحث", "musheer":"⚖️ مشير", "lughawi":"ع لغوي",
     "hakeem":"🧠 حكيم", "muraqib":"🔍 مراقب", "bani":"🕸️ بانِ",
@@ -48,4 +49,10 @@ SYSTEM_PROMPTS = {
 **المفاهيم:** م١، م٢، م٣""",
 }
 
-AGENT_MODELS = {"lughawi": ARABIC_MODEL}
+AGENT_MODELS = {
+    "bahith": PRIMARY_MODEL,
+    "musheer": PRIMARY_MODEL,
+    "lughawi": PRIMARY_MODEL,
+    "hakeem": PRIMARY_MODEL,
+    "bani": PRIMARY_MODEL,
+}

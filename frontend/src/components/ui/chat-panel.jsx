@@ -3,6 +3,7 @@ import { Bubble } from "./message-bubble";
 import { DARK, LIGHT } from "../../data/theme";
 import { isAr } from "../../utils/arabic";
 import { callBackend } from "../../features/chats/api/get-response";
+import { BACKEND } from "../../data/backend";
 
 export const ChatPanel = ({ ag, theme }) => {
   const t = theme === "dark" ? DARK : LIGHT;
@@ -15,7 +16,7 @@ export const ChatPanel = ({ ag, theme }) => {
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
 
   useEffect(() => {
-    fetch(`http://localhost:8000/chat/${ag.id}`)
+    fetch(`${BACKEND}/chat/${ag.id}`)
       .then(r => r.json())
       .then(data => {
         const loaded = data.messages.map((m, i) => ({
@@ -31,7 +32,7 @@ export const ChatPanel = ({ ag, theme }) => {
   }, [ag.id]);
 
   const clearChat = async () => {
-    await fetch(`http://localhost:8000/chat/${ag.id}`, { method: "DELETE" });
+    await fetch(`${BACKEND}/chat/${ag.id}`, { method: "DELETE" });
     setMsgs([]);
   };
 
@@ -56,14 +57,16 @@ export const ChatPanel = ({ ag, theme }) => {
       chunk => upd(m => ({ ...m, content: m.content + chunk })),
       q2 => upd(m => ({ ...m, searches: [...m.searches, { q: q2, done: false }] })),
       () => upd(m => ({
-        ...m, streaming: false,
+        ...m,
+        streaming: false,
         latency: Date.now() - t0,
         searches: m.searches.map(s => ({ ...s, done: true }))
       })),
-      err => upd(m => ({
+      meta => upd(m => ({
         ...m,
-        content: `خطأ في الاتصال:\n${err}\n\nتأكد من تشغيل الخادم.`,
-        streaming: false, error: true
+        streaming: false,
+        latency: Date.now() - t0,
+        pipeline: meta?.pipeline,
       })),
     );
     setBusy(false);

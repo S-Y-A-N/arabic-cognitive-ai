@@ -21,27 +21,40 @@ async def ddg_search(query: str, n: int = 5) -> list:
         return []
 
 
-def ollama_call(
+def ollama_streaming(
         model: str = PRIMARY_MODEL,
         messages: list[dict] = [],
-        stream = False
     ):
     try:
         # model='gemma3:1b-it-qat' created_at='2026-05-11T13:11:10.045441322Z' done=False done_reason=None total_duration=None load_duration=None prompt_eval_count=None prompt_eval_duration=None eval_count=None eval_duration=None message=Message(role='assistant', content='Hello', thinking=None, images=None, tool_name=None, tool_calls=None) logprobs=None
         response = ollama.chat(
             model=model,
-            stream=stream,
+            stream=True,
             messages=messages,
             options={
                 'num_predict': 1000,
             }
         )
-        if stream:
-            for chunk in response:
-                yield chunk['message']['content']
-            if chunk['done']: return # TODO CHECK
-        else:
-            return response['message']['content']
+        for chunk in response:
+            yield chunk['message']['content']
+        if chunk['done']: return # TODO CHECK
+    except Exception as e:
+        log.error(f"Ollama error: {e}")
+        
+def ollama_blocking(
+        model: str = PRIMARY_MODEL,
+        messages: list[dict] = [],
+    ):
+    try:
+        response = ollama.chat(
+            model=model,
+            stream=False,
+            messages=messages,
+            options={
+                'num_predict': 1000,
+            }
+        )
+        return response['message']['content']
     except Exception as e:
         log.error(f"Ollama error: {e}")
         

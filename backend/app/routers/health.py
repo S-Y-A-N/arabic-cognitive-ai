@@ -5,7 +5,7 @@ from app.core.config import *
 
 router = APIRouter(prefix="/health", tags=["health"])
 
-@router.get("/")
+@router.get("")
 async def health():
     try:
         async with httpx.AsyncClient(timeout=4) as c:

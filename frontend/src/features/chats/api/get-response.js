@@ -11,28 +11,40 @@ export async function callBackend(query, mode, agentId, onChunk, onSearch, onDon
     // Announce which agents will run (via health check intent)
     onSearch("⚙️ " + mode.replace("single:", ""));
 
-    const response = await fetch(`${BACKEND}/query/stream`, {
+    const endpoint = mode === "auto" ? "query" : "query/stream"
+    const response = await fetch(`${BACKEND}/${endpoint}`, {
       method: "POST",
       headers,
       body: JSON.stringify({ query, mode, session_id: agentId }),
     });
+    console.log(response.body)
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error);
     }
-    
+
+    const META_PREFIX = "__METADATA__";
     while (true) {
       const { value, done } = await reader.read();
-      // console.log(value)
       if (done) break;
 
       // add chunks to buffer
       const chunk = decoder.decode(value, { stream: true });
-      onChunk(chunk)
 
+      if (chunk.includes(META_PREFIX)) {
+        const [text, metaStr] = chunk.split(META_PREFIX);
+        if (text) onChunk(text);
+        const meta = JSON.parse(metaStr);
+        if (meta.pipeline) {
+          meta.pipeline.forEach(agent => onSearch(agent)); // one chip per agent
+        }
+        onDone(meta);
+        return
+      }
+
+      onChunk(chunk)
     }
     onDone({});
   } catch (e) {
