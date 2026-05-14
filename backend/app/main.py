@@ -8,7 +8,7 @@ from app.core.config import *
 from app.core.logger import log
 from app.core.security import limiter
 
-from app.routers import query, health
+from app.routers import query, health, chat
   
 async def lifespan(app: FastAPI):
     log.info("🚀 ACAI: محرك الذكاء الاصطناعي المعرفي العربي")
@@ -64,6 +64,7 @@ async def security_middleware(request: Request, call_next):
 # routers
 app.include_router(health.router)
 app.include_router(query.router)
+app.include_router(chat.router)
 
 
 if __name__ == "__main__":

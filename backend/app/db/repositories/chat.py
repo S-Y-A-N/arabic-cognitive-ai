@@ -30,11 +30,33 @@ class ChatRepository:
         self.db.refresh(r)
         return r
 
-    def get_history(self, session_id: str, limit: int = 10) -> list[Query]:
+    # def get_history(self, session_id: str, limit: int = 10) -> list[Query]:
+    #     chat = self.db.query(Chat).filter(Chat.session_id == session_id).first()
+    #     if not chat:
+    #         return []
+    #     return (self.db.query(Query)
+    #             .filter(Query.chat_id == chat.chat_id)
+    #             .order_by(Query.query_id.desc())
+    #             .limit(limit).all())
+    def get_history(self, chat_id: int, limit: int = 10) -> list[dict]:
+        queries = (self.db.query(Query)
+                   .filter(Query.chat_id == chat_id)
+                   .order_by(Query.query_id.asc())
+                   .limit(limit).all())
+
+        messages = []
+        for q in queries:
+            messages.append({"role": "user", "content": q.query})
+            if q.response:  # joined response
+                messages.append({"role": "assistant", "content": q.response.response})
+        return messages
+    
+    def clear_session(self, session_id: str):
         chat = self.db.query(Chat).filter(Chat.session_id == session_id).first()
         if not chat:
-            return []
-        return (self.db.query(Query)
-                .filter(Query.chat_id == chat.chat_id)
-                .order_by(Query.query_id.desc())
-                .limit(limit).all())
+            return
+        # delete responses first due to foreign key constraints
+        for query in chat.queries:
+            self.db.delete(query.response)
+            self.db.delete(query)
+        self.db.commit()

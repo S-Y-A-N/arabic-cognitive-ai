@@ -6,7 +6,7 @@ import { isAr } from "../../utils/arabic";
 
 export const Bubble = memo(({ msg, ag, t }) => {
   if (msg.role === "user") return (
-    <div style={{ display:"flex", justifyContent:"flex-end",
+    <div className="bubble" style={{ display:"flex", justifyContent:"flex-end",
       marginBottom:20, animation:"acai-up .25s ease" }}>
       <div style={{ maxWidth:"74%", background:t.userBg,
         border:"1px solid #2563eb22", borderRadius:"18px 18px 4px 18px",
@@ -18,7 +18,7 @@ export const Bubble = memo(({ msg, ag, t }) => {
 
   const ar2 = isAr(msg.content);
   return (
-    <div style={{ display:"flex", gap:12, marginBottom:24, animation:"acai-up .3s ease" }}>
+    <div className="bubble" style={{ display:"flex", gap:12, marginBottom:24, animation:"acai-up .3s ease" }}>
       <div style={{ width:36, height:36, borderRadius:10, flexShrink:0, marginTop:3,
         background:`${ag.hex}14`, border:`1.5px solid ${ag.hex}44`,
         display:"flex", alignItems:"center", justifyContent:"center",

@@ -1,55 +1,75 @@
-from typing import List, Dict
-
-from app.core.logger import log
 from app.core.orchestrator_config import *
-from app.services.agent import build_agent_prompt
-from app.core.agent_config import AGENT_LABELS
+from app.services.agent import build_agent_prompt, build_ollama_messages, ollama_call
+from app.core.agent_config import AGENT_LABELS, AGENT_MODELS
+from app.core.config import PRIMARY_MODEL
 
 
-async def orchestrate(query: str, mode: str = "auto",
-                      session_id: str = "default") -> dict:
+async def orchestrate(
+        query: str,
+        message_history: list[dict] | None = None,
+        mode: str = "auto"
+    ) -> dict:
     """Full orchestration: memory → RAG → pipeline → merge → save."""
-    # 1. Memory retrieval
-    # mem_ctx  = memory.get_context(query, limit=3)
-    # mem_used = bool(mem_ctx)
-
-    # 2. RAG retrieval
-    # rag_ctx  = rag.get_rag_context(query, k=2)
-    # rag_used = bool(rag_ctx)
-
-    # 3. Intent + pipeline
-    intent   = classify_intent(query)
-    pipeline = build_pipeline(intent, mode)
     
+    # TODO RAG retrieval
+    # rag_context  = rag.get_rag_context(query, k=2)
+    # rag_used = bool(rag_context)
 
-    # 4. Sequential execution (context accumulates)
-    prompts:  Dict[str, str] = {}
-    acc_ctx:  str = ""
-    for agent_id in pipeline:
-        agent_prompt = await build_agent_prompt(
-            agent_id   = agent_id,
-            query      = query,
-            prev_context = acc_ctx,
-            # memory_ctx = mem_ctx if not acc_ctx else "",
-            # rag_ctx    = rag_ctx  if not acc_ctx else "",
-        )
-        prompts[agent_id] = agent_prompt
+    # Auto: Intent + pipeline
+    if mode == "auto":
+        intent = classify_intent(query)
+        pipeline = build_pipeline(intent, mode)
+        
+        outputs: dict[str, str] = {} # messages per agent id
+        
+        acc_context = "" # accumulated context
+        for agent_id in pipeline:
+            model = AGENT_MODELS.get(agent_id, PRIMARY_MODEL)
+            # build agent prompt (return system & built prompt as Ollama messages)
+            system, prompt = await build_agent_prompt(
+                agent_id=agent_id,
+                query=query,
+                prev_context=acc_context
+                # rag_context = rag_context if not acc_context else "",
+            )
 
+            # build the messages structure for ollama, then execute agent
+            messages = build_ollama_messages(system=system, prompt=prompt, message_history=message_history)
+            agent_response = ollama_call(model=model, messages=messages, stream=False)
+
+            # save agent response as context for next agent, and save the response
+            acc_context = agent_response
+            outputs[agent_id] = agent_response
+
+        # merge agents outputs
+        final_output = merge_pipeline_outputs(outputs)
+        
+        return {
+            'output': final_output,
+            'pipeline': pipeline,
+            'intent': intent,
+        }
+        
+    # One agent, enables response streaming...
+    
+    agent_id = mode.split(":")[1]
+    model = AGENT_MODELS.get(agent_id, PRIMARY_MODEL)
+    
+    # build agent prompt (return system & prompt)
+    system, prompt = await build_agent_prompt(
+        agent_id=agent_id,
+        query=query,
+    )
+                
+    # build the messages structure for ollama, then return it for streaming
+    messages = build_ollama_messages(system=system, prompt=prompt, message_history=message_history)
+    
     return {
-        'pipeline': pipeline,
-        'prompts': prompts,
-        'intent': intent,
-        # "memory_used": mem_used,
-        # "rag_used":    rag_used,
-        # "agents":      {k: v[:200] + "..." if len(v) > 200 else v
-        #                 for k, v in streams.items()},
+        'messages': messages,
     }
-
-    # 6. Save to memory + log
-    # memory.save("orchestrator", query, final, quality=3)
-    # memory.log_experiment(query,
-    #                       "with_memory" if mem_used else "without_memory",
-    #                       pipeline, latency)
+        
+    # TODO sequential agent pipeline
+    # pipeline: first get built prompt then run first agent then get response and give to next agent, then stream response to user
 
     
 def classify_intent(query: str) -> dict:
@@ -66,7 +86,7 @@ def classify_intent(query: str) -> dict:
     }
 
 
-def build_pipeline(intent: dict, mode: str = "auto") -> List[str]:
+def build_pipeline(intent: dict, mode: str = "auto") -> list[str]:
     # Single-agent override
     if mode.startswith("single:"):
         a = mode.split(":", 1)[1]
@@ -91,14 +111,19 @@ def build_pipeline(intent: dict, mode: str = "auto") -> List[str]:
         if a not in seen: seen.add(a); out.append(a)
     return out
 
-def merge_pipeline_outputs(pipeline: List[str], outputs: Dict[str, str]) -> str:
-    valid = {a: o for a, o in outputs.items() if o.status_code == 200}
-    if not valid: return "لم أتمكن من توليد إجابة."
-    if len(valid) == 1: return next(iter(valid.values()))
+def merge_pipeline_outputs(outputs: dict[str, str]) -> str:
+    valid_outputs = {a: o for a, o in outputs.items() if o}
+    
+    if not valid_outputs: return "لم أتمكن من توليد إجابة."
+    if len(valid_outputs) == 1: return next(iter(valid_outputs.values()))
+
     parts = []
-    for a in pipeline:
-        if a != "muraqib" and a in valid:
-            parts.append(f"### {AGENT_LABELS.get(a, a)}\n{valid[a]}")
-    if "muraqib" in valid:
-        parts.append(f"\n---\n### 🔍 مراقب\n{valid['muraqib']}")
-    return "\n\n".join(parts)
+    for agent_id in outputs.keys():
+        if agent_id != "muraqib":
+            parts.append(f"### {AGENT_LABELS.get(agent_id, agent_id)}\n{valid_outputs[agent_id]}")
+            
+    if "muraqib" in valid_outputs:
+        parts.append(f"\n---\n### 🔍 مراقب\n{valid_outputs['muraqib']}")
+    
+    merged_outputs = "\n\n".join(parts)
+    return merged_outputs
